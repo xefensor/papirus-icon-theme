@@ -140,14 +140,15 @@ def build_theme(source: Path, destination: Path, display_name: str) -> tuple[int
 
     destination.parent.mkdir(parents=True, exist_ok=True)
 
-    # Important for Papirus-Dark: many directories are symlinks into Papirus.
-    # Dereferencing them makes the generated theme self-contained and also lets
-    # us traverse all symbolic directories reliably.
+    # Important for Papirus-Dark: many directories are relative symlinks into
+    # the sibling Papirus directory. Dereference them so the generated theme is
+    # self-contained. Do NOT use ignore_dangling_symlinks=True here: Python's
+    # copytree checks relative link targets in a way that causes valid Papirus
+    # links such as ../../Papirus/22x22/symbolic to be skipped entirely.
     shutil.copytree(
         source,
         destination,
         symlinks=False,
-        ignore_dangling_symlinks=True,
     )
 
     rewrite_index_theme(destination / "index.theme", display_name)
