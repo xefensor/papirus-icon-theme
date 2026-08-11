@@ -12,6 +12,7 @@ import importlib.util
 import os
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 
@@ -85,9 +86,23 @@ class ColorfulThemeTests(unittest.TestCase):
                 "Papirus-Dark Colorful Test",
             )
 
+            unique_unmatched = sorted({generator.normalized_stem(path) for path in unmatched})
+            context_counts = Counter(
+                generator.context_key(path, destination) or "unknown" for path in unmatched
+            )
             print(
                 f"REAL Papirus-Dark result: symbolic={total}, "
-                f"replaced={replaced}, unmatched={len(unmatched)}",
+                f"replaced={replaced}, unmatched={len(unmatched)}, "
+                f"unique-unmatched={len(unique_unmatched)}",
+                flush=True,
+            )
+            print(
+                "UNMATCHED contexts: "
+                + ", ".join(f"{name}={count}" for name, count in sorted(context_counts.items())),
+                flush=True,
+            )
+            print(
+                "UNMATCHED sample: " + ", ".join(unique_unmatched[:120]),
                 flush=True,
             )
 
