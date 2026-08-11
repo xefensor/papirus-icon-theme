@@ -1,42 +1,34 @@
 # Papirus Colorful
 
-This fork includes a generator for Papirus variants that remove KDE's
-theme-driven monochrome artwork while keeping the original Papirus shapes and
-variant-specific styling.
+This fork includes a generator for user-local Papirus variants that replace KDE's theme-driven monochrome UI artwork with colorful Papirus-style artwork.
 
-It covers both `*-symbolic` names and ordinary KDE UI/action icons that still use
-`currentColor`, such as suspend, hibernate, reboot, shutdown, pin, edit, remove,
-panel, status and context-menu icons.
+The generator follows [`tools/work/DESIGN.md`](tools/work/DESIGN.md). It does **not** invent arbitrary hex colors: generated fallback colors come only from [`tools/work/examples-papirus.svg`](tools/work/examples-papirus.svg), which `DESIGN.md` explicitly points to as a source of good Papirus colors.
 
-## Variants
+## Design rules
 
-The generator supports all three Papirus variants independently:
+For every dynamic SVG (`currentColor`, `context-fill`, or `context-stroke`):
 
-- `Papirus-Colorful`
-- `Papirus-Dark-Colorful`
-- `Papirus-Light-Colorful`
+1. If the selected Papirus variant already contains a fixed-color version with the same semantic icon name, that existing artwork is copied exactly.
+2. Otherwise the original geometry is preserved and converted into a simple colored Papirus base using colors from `examples-papirus.svg`.
+3. Generated 22px and 24px icons receive the Papirus 0.5px shadow/highlight treatment described in `DESIGN.md`; 32px, 48px and 64px use 1px. 16px icons receive no generated shadow/highlight.
+4. Shadows are pure black at 20%. Highlights are pure white at 20% (10% for dark-grey bases), matching the design notes.
+5. No gradients are introduced.
+6. Existing fixed-color light/dark artwork always wins, so `Papirus-Light-Colorful` and `Papirus-Dark-Colorful` retain variant-specific artwork when Papirus provides it.
 
-Light and dark variants are generated from their matching Papirus source theme.
-If Papirus already ships different fixed-color artwork for light and dark, the
-matching variant is used. If no fixed-color artwork exists, the SVG keeps its
-original geometry and receives colors from that source variant's own embedded
-Papirus/KDE semantic palette.
+The generated base colors are the exact example colors already stored in `tools/work/examples-papirus.svg`: blue `#248afd`, green `#4bae4f`, red `#c2352a`, pink `#f9548f`, orange `#e97e10`, purple `#7767c0`, light grey `#cccccc`, and dark grey `#5d5d5d`.
 
-This means light/dark-specific artwork and palette choices are never collapsed
-into one generic theme.
+## Build
 
-## Install for the current user
-
-From the repository root, build the dark variant:
-
-```bash
-make colorful
-```
-
-`make colorful` is an alias for:
+From the repository root:
 
 ```bash
 make colorful-dark
+```
+
+creates:
+
+```text
+~/.local/share/icons/Papirus-Dark-Colorful
 ```
 
 For the other variants:
@@ -46,78 +38,34 @@ make colorful-normal
 make colorful-light
 ```
 
-To build all three:
+Or build all three:
 
 ```bash
 make colorful-all
 ```
 
-They are written to:
+The generated themes are:
 
 ```text
-~/.local/share/icons/Papirus-Colorful
-~/.local/share/icons/Papirus-Dark-Colorful
-~/.local/share/icons/Papirus-Light-Colorful
+Papirus-Colorful
+Papirus-Dark-Colorful
+Papirus-Light-Colorful
 ```
 
-Then select the matching Colorful theme in:
+Then select the desired theme in:
 
 ```text
 System Settings -> Colors & Themes -> Icons
 ```
 
-If Plasma does not immediately repaint every icon, restart Plasma Shell:
+If Plasma does not immediately repaint every icon:
 
 ```bash
 systemctl --user restart plasma-plasmashell.service
 ```
 
-Some third-party tray applications may also need to be restarted because they
-cache their icon.
+Some third-party tray applications may need to be restarted separately.
 
-## How coloring works
+## Why the generator keeps separate variants
 
-The generator uses this priority:
-
-1. **Existing fixed-color Papirus artwork wins.** If the selected Papirus variant
-   already contains fixed-color artwork with the same semantic icon name, that
-   file is copied exactly.
-2. **Otherwise the original SVG is colorized without changing its geometry.**
-   `currentColor`, `context-fill` and `context-stroke` are replaced using the
-   palette embedded by Papirus itself.
-3. Existing semantic classes remain meaningful: positive artwork stays green,
-   negative/error artwork stays red, warning/attention artwork stays orange and
-   highlight artwork stays blue.
-4. Plain foreground UI actions are assigned a semantic color by their icon name.
-   Examples: Sleep/Hibernate use NeutralText orange, Restart/edit/navigation use
-   Highlight blue, Shutdown/remove/uninstall use NegativeText red, and add/apply
-   style actions use PositiveText green.
-
-The generator processes every dynamic SVG, not only symbolic directories. The
-build fails its regression tests if any `currentColor`, `context-fill` or
-`context-stroke` artwork remains in the generated real Papirus, Papirus-Dark or
-Papirus-Light theme.
-
-Papirus-Dark and Papirus-Light contain relative symlinks into sibling themes.
-Those links are dereferenced during generation, so each generated theme is a
-self-contained user-local theme.
-
-## Direct use
-
-The Python tool can also be called directly:
-
-```bash
-python3 tools/make-colorful-theme.py --source Papirus-Dark
-python3 tools/make-colorful-theme.py --source Papirus
-python3 tools/make-colorful-theme.py --source Papirus-Light
-```
-
-Custom output names are supported:
-
-```bash
-python3 tools/make-colorful-theme.py \
-  --source Papirus-Dark \
-  --output-root ~/.local/share/icons \
-  --name Papirus-Xef \
-  --display-name "Papirus Xef"
-```
+`Papirus`, `Papirus-Dark`, and `Papirus-Light` can contain different artwork or overrides. Each generated theme starts from its corresponding source variant and dereferences Papirus' relative symlinks, producing a self-contained theme while preserving any real variant-specific colored icons.
