@@ -1,6 +1,6 @@
 # Papirus Colorful
 
-This fork includes a generator for user-local Papirus variants that replace KDE's theme-driven monochrome UI artwork with colorful Papirus-style artwork.
+This fork includes a generator for user-local Papirus variants that replace KDE's theme-driven monochrome UI artwork with Papirus-style colored or neutral artwork.
 
 The generator follows [`tools/work/DESIGN.md`](tools/work/DESIGN.md). Existing fixed-color Papirus artwork always has priority and is copied unchanged. Only icons with no real fixed-color counterpart are generated.
 
@@ -9,33 +9,42 @@ The generator follows [`tools/work/DESIGN.md`](tools/work/DESIGN.md). Existing f
 For every dynamic SVG (`currentColor`, `context-fill`, or `context-stroke`):
 
 1. If the selected Papirus variant already contains a fixed-color version with the same semantic icon name, that existing artwork is copied exactly.
-2. Otherwise the original geometry is preserved and converted into a generated fallback using the unified semantic system in [`tools/work/generated-color-spec.md`](tools/work/generated-color-spec.md).
+2. Otherwise the original geometry is preserved and converted into a generated fallback using the semantic system in [`tools/work/generated-color-spec.md`](tools/work/generated-color-spec.md).
 3. Generated 22px and 24px icons receive the Papirus 0.5px shadow/highlight treatment described in `DESIGN.md`; 32px, 48px and 64px use 1px. 16px icons receive no generated shadow/highlight.
-4. Shadows are pure black at 20%. Highlights are pure white at 20%, matching the design notes for these generated mid-value colors.
+4. Shadows are pure black at 20%. Highlights are pure white at 20%; dark-grey neutral bases use the 10% highlight specified by the design notes for dark elements.
 5. No gradients are introduced.
 6. Existing fixed-color light/dark artwork always wins, so `Papirus-Light-Colorful` and `Papirus-Dark-Colorful` retain variant-specific artwork whenever Papirus provides it.
 
 ## Generated-only colors
 
-The generator no longer assigns a broad rainbow of colors to monochrome icons. Generated fallbacks use only four semantic families:
+Generated fallbacks use four semantic color families plus a theme-aware neutral default:
 
-- **Blue** — neutral system controls, editing/configuration, navigation, devices, audio, displays, network/Bluetooth, restart/session.
+- **Blue** — explicit neutral system/device identity: editing/configuration, audio, displays, network/Bluetooth, restart/session, navigation.
 - **Green** — add/create/apply/save/install/enable/connect/start/resume/success.
 - **Amber** — suspend/hibernate/sleep/pause, pin/favorite/bookmark/lock, warning/limited states.
 - **Red** — remove/delete/uninstall/disable/disconnect/shutdown/cancel/close/error/critical/muted states.
+- **Neutral** — ambiguous/general UI icons where color would imply meaning that is not actually present.
 
-The hues come from the Papirus example palette in `tools/work/examples-papirus.svg`, but generated UI fallbacks cap HLS saturation at 45% so they sit more quietly beside original Papirus artwork instead of looking like bright accent-colored symbolic icons.
+The semantic hues come from `tools/work/examples-papirus.svg`. Generated semantic colors cap HLS saturation at 58%, which keeps them a little softer than full Papirus artwork without making them look washed out.
 
-Current generated palette:
+Current generated semantic palette:
 
 ```text
-blue  #5f8ec2
+blue  #508dd1
 green #4bae4f
-amber #b57d44
-red   #ab4941
+amber #c57d34
+red   #ba3b32
 ```
 
-This muted palette applies **only to generated fallbacks**. Existing Papirus color artwork is never desaturated or recolored.
+Neutral fallback colors are variant-aware:
+
+```text
+Papirus-Dark  #cccccc
+Papirus-Light #5d5d5d
+Papirus       #5d5d5d
+```
+
+This processing applies **only to generated fallbacks**. Existing Papirus color artwork is never desaturated or recolored.
 
 ## Functional consistency
 
@@ -50,6 +59,7 @@ Add / Save / Apply  -> green
 Edit / Settings     -> blue
 Pin / Favorite      -> amber
 Remove / Delete     -> red
+Generic/ambiguous   -> neutral
 
 Audio normal        -> blue
 Audio muted/error   -> red
@@ -63,7 +73,7 @@ Battery low              -> amber
 Battery critical/empty   -> red
 ```
 
-Explicit KDE semantic classes (`ColorScheme-PositiveText`, `NegativeText`, `NeutralText`, and `Highlight`) are preserved as green, red, amber, and blue respectively.
+Explicit KDE semantic classes (`ColorScheme-PositiveText`, `NegativeText`, `NeutralText`, and `Highlight`) remain meaningful and override the filename default for that SVG element.
 
 ## Build
 
