@@ -24,6 +24,12 @@ $(ICON_THEMES):
 uninstall:
 	-rm -rf $(foreach icon_theme,$(ICON_THEMES),"$(DESTDIR)$(PREFIX)/share/icons/$(icon_theme)")
 
+# Build Xef's user-local Papirus variant that replaces symbolic artwork with
+# matching colorful Papirus icons where possible.
+.PHONY: colorful
+colorful:
+	python3 tools/make-colorful-theme.py --source Papirus-Dark
+
 _get_version:
 	$(eval VERSION := $(shell git show -s --format=%cd --date=format:%Y%m%d HEAD))
 	@echo $(VERSION)
