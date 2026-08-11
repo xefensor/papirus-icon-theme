@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
-"""Create a Papirus variant whose symbolic icon names resolve to fixed-color artwork.
+"""Build a Papirus variant that does not rely on symbolic/theme colors.
 
-KDE Plasma may explicitly request icons ending in ``-symbolic``. Removing the
-symbolic directories is not enough because icon-theme inheritance can then fall
-back to another monochrome theme. This tool keeps the symbolic filenames KDE
-asks for, but replaces dynamic/currentColor artwork with fixed-color Papirus
-artwork when a matching icon exists.
+KDE Plasma can explicitly prefer ``*-symbolic`` icons. Merely deleting those
+files is not sufficient because icon-theme inheritance can fall back to another
+symbolic icon. Instead, this generator keeps every icon name Plasma may request
+but makes the resulting artwork independent of the desktop color scheme.
 
-The source theme is copied with symlinks dereferenced, so Papirus-Dark's links
-back into Papirus become a self-contained generated theme.
+For every SVG that uses ``currentColor``, ``context-fill`` or ``context-stroke``:
+
+1. Reuse a same-named fixed-color Papirus icon when one exists.
+2. Otherwise preserve the original symbolic shape and bake in a deterministic
+   Papirus-style color. Semantic ColorScheme classes such as NegativeText,
+   PositiveText and NeutralText keep useful red/green/orange meanings.
+
+The generated theme is self-contained and inherits only hicolor, so it cannot
+silently fall back to Breeze symbolic artwork for missing names.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import shutil
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -36,6 +44,39 @@ KNOWN_CONTEXTS = {
 }
 
 IMAGE_SUFFIXES = {".svg", ".png", ".xpm"}
+DYNAMIC_COLOR_MARKERS = ("currentcolor", "context-fill", "context-stroke")
+
+# Colors already common in Papirus and Material-style Linux icon themes. The
+# fallback choice is deterministic per icon name, so an icon keeps the same
+# color across sizes and regenerated builds.
+PALETTE = (
+    "#3999e6",  # blue
+    "#00bcd4",  # cyan
+    "#4caf50",  # green
+    "#ff9800",  # orange
+    "#9c27b0",  # purple
+    "#009688",  # teal
+    "#e91e63",  # pink
+    "#3f51b5",  # indigo
+    "#8bc34a",  # light green
+    "#ffc107",  # amber
+)
+
+SEMANTIC_COLORS = {
+    "negative": "#f44336",
+    "positive": "#4caf50",
+    "neutral": "#ff9800",
+    "highlight": "#3999e6",
+}
+
+
+@dataclass(frozen=True)
+class BuildStats:
+    symbolic_files: int
+    dynamic_before: int
+    reused_fixed: int
+    synthesized: int
+    dynamic_remaining: int
 
 
 def is_symbolic_part(part: str) -> bool:
@@ -52,28 +93,16 @@ def is_symbolic_path(path: Path, root: Path) -> bool:
 
 
 def uses_dynamic_theme_color(path: Path) -> bool:
-    """Return True for SVG artwork whose visible color is supplied by the theme.
-
-    A non-symbolic filename is not enough: Papirus has files such as
-    22x22/panel/audio-volume-high.svg which still use ``currentColor`` and KDE
-    ColorScheme classes. Those remain monochrome in Plasma and must not be used
-    as the colorful replacement source.
-    """
+    """Return True if an SVG still asks the renderer for a theme color."""
     if path.suffix.lower() != ".svg":
         return False
 
     try:
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        lowered = path.read_text(encoding="utf-8", errors="ignore").lower()
     except OSError:
         return True
 
-    lowered = text.lower()
-    return (
-        "currentcolor" in lowered
-        or "colorscheme-" in lowered
-        or "context-fill" in lowered
-        or "context-stroke" in lowered
-    )
+    return any(marker in lowered for marker in DYNAMIC_COLOR_MARKERS)
 
 
 def normalized_stem(path: Path) -> str:
@@ -99,37 +128,119 @@ def context_key(path: Path, root: Path) -> str | None:
     return None
 
 
-def candidate_score(symbolic: Path, candidate: Path, root: Path) -> int:
+def candidate_score(target: Path, candidate: Path, root: Path) -> int:
     score = 0
 
-    sym_size, sym_scale = size_key(symbolic, root)
-    cand_size, cand_scale = size_key(candidate, root)
-    sym_context = context_key(symbolic, root)
-    cand_context = context_key(candidate, root)
+    target_size, target_scale = size_key(target, root)
+    candidate_size, candidate_scale = size_key(candidate, root)
+    target_context = context_key(target, root)
+    candidate_context = context_key(candidate, root)
 
-    if sym_context and sym_context == cand_context:
+    if target_context and target_context == candidate_context:
         score += 10_000
-    elif {sym_context, cand_context} <= {"panel", "status"}:
+    elif {target_context, candidate_context} <= {"panel", "status"}:
         # KDE/Papirus often place equivalent tray artwork in either directory.
         score += 8_000
 
-    if sym_size and cand_size:
-        if sym_size == cand_size:
+    if target_size and candidate_size:
+        if target_size == candidate_size:
             score += 5_000
         else:
-            score -= abs(sym_size - cand_size) * 20
+            score -= abs(target_size - candidate_size) * 20
 
-    if sym_scale == cand_scale:
+    if target_scale == candidate_scale:
         score += 500
 
     if candidate.suffix.lower() == ".svg":
         score += 300
 
-    # Prefer regular fixed-size directories over unusual aliases when tied.
     if not any("@" in part for part in candidate.relative_to(root).parts):
         score += 20
 
     return score
+
+
+def base_color_for_stem(stem: str) -> str:
+    """Choose a stable, meaningful color for symbolic-only artwork."""
+    lowered = stem.lower()
+
+    battery = re.search(r"battery-level-(\d+)", lowered)
+    if battery:
+        level = int(battery.group(1))
+        if level <= 20:
+            return "#f44336"
+        if level <= 50:
+            return "#ff9800"
+        return "#4caf50"
+
+    hints: tuple[tuple[tuple[str, ...], str], ...] = (
+        (("error", "fail", "critical", "denied", "broken"), "#f44336"),
+        (("warning", "caution"), "#ff9800"),
+        (("battery", "charging", "power"), "#4caf50"),
+        (("network", "wireless", "wifi", "bluetooth"), "#3999e6"),
+        (("audio", "volume", "headphone", "microphone", "speaker"), "#00bcd4"),
+        (("brightness", "sun", "daytime"), "#ffc107"),
+        (("camera", "video", "photo", "image"), "#9c27b0"),
+        (("keyboard", "caps", "num-lock", "scroll-lock"), "#9c27b0"),
+        (("drive", "disk", "storage", "usb", "removable"), "#009688"),
+        (("lock", "auth", "security", "shield", "key"), "#ff9800"),
+        (("clock", "alarm", "time", "timer"), "#ff9800"),
+        (("success", "positive", "connected", "uptodate"), "#4caf50"),
+    )
+    for words, color in hints:
+        if any(word in lowered for word in words):
+            return color
+
+    digest = hashlib.sha256(lowered.encode("utf-8")).digest()
+    return PALETTE[digest[0] % len(PALETTE)]
+
+
+def color_for_tag(tag: str, fallback: str) -> str:
+    """Preserve KDE semantic color classes while fixing ordinary Text colors."""
+    class_match = re.search(r"\bclass\s*=\s*([\"'])(.*?)\1", tag, flags=re.I | re.S)
+    if not class_match:
+        return fallback
+
+    classes = class_match.group(2).lower()
+    if "negative" in classes:
+        return SEMANTIC_COLORS["negative"]
+    if "positive" in classes:
+        return SEMANTIC_COLORS["positive"]
+    if "neutral" in classes:
+        return SEMANTIC_COLORS["neutral"]
+    if "highlight" in classes:
+        return SEMANTIC_COLORS["highlight"]
+    return fallback
+
+
+def synthesize_fixed_color_svg(path: Path) -> None:
+    """Bake fixed colors into a dynamic SVG without changing its geometry."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    fallback = base_color_for_stem(normalized_stem(path))
+
+    # First replace dynamic colors tag-by-tag so ColorScheme semantic classes
+    # can retain red/green/orange/blue meaning where Papirus supplied it.
+    def replace_tag(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        lowered = tag.lower()
+        if not any(marker in lowered for marker in DYNAMIC_COLOR_MARKERS):
+            return tag
+        color = color_for_tag(tag, fallback)
+        tag = re.sub(r"currentColor", color, tag, flags=re.I)
+        tag = re.sub(r"context-fill", color, tag, flags=re.I)
+        tag = re.sub(r"context-stroke", color, tag, flags=re.I)
+        return tag
+
+    text = re.sub(r"<[^>]+>", replace_tag, text, flags=re.S)
+
+    # Catch dynamic references inside CSS text rather than element attributes.
+    # These cannot be reliably associated with one semantic class without a CSS
+    # parser, so use the icon's stable fallback color.
+    text = re.sub(r"currentColor", fallback, text, flags=re.I)
+    text = re.sub(r"context-fill", fallback, text, flags=re.I)
+    text = re.sub(r"context-stroke", fallback, text, flags=re.I)
+
+    path.write_text(text, encoding="utf-8")
 
 
 def rewrite_index_theme(index_path: Path, display_name: str) -> None:
@@ -137,14 +248,11 @@ def rewrite_index_theme(index_path: Path, display_name: str) -> None:
     text = re.sub(r"(?m)^Name=.*$", f"Name={display_name}", text, count=1)
     text = re.sub(
         r"(?m)^Comment=.*$",
-        "Comment=Papirus with fixed-color artwork for symbolic icon requests",
+        "Comment=Papirus with fixed colorful artwork instead of symbolic theme colors",
         text,
         count=1,
     )
 
-    # The generated theme is self-contained. Keeping only hicolor as inheritance
-    # avoids falling straight back into Breeze's symbolic artwork for missing
-    # names while retaining the standard freedesktop fallback.
     if re.search(r"(?m)^Inherits=", text):
         text = re.sub(r"(?m)^Inherits=.*$", "Inherits=hicolor", text, count=1)
     else:
@@ -153,7 +261,7 @@ def rewrite_index_theme(index_path: Path, display_name: str) -> None:
     index_path.write_text(text, encoding="utf-8")
 
 
-def build_theme(source: Path, destination: Path, display_name: str) -> tuple[int, int, list[Path]]:
+def build_theme(source: Path, destination: Path, display_name: str) -> BuildStats:
     if not (source / "index.theme").is_file():
         raise FileNotFoundError(f"Not an icon theme: {source}")
 
@@ -165,52 +273,67 @@ def build_theme(source: Path, destination: Path, display_name: str) -> tuple[int
 
     destination.parent.mkdir(parents=True, exist_ok=True)
 
-    # Important for Papirus-Dark: many directories are relative symlinks into
-    # the sibling Papirus directory. Dereference them so the generated theme is
-    # self-contained. Do NOT use ignore_dangling_symlinks=True here: Python's
-    # copytree checks relative link targets in a way that causes valid Papirus
-    # links such as ../../Papirus/22x22/symbolic to be skipped entirely.
+    # Papirus-Dark contains relative symlinks into the sibling Papirus theme.
+    # Dereference them to make the generated theme fully self-contained.
     shutil.copytree(source, destination, symlinks=False)
-
     rewrite_index_theme(destination / "index.theme", display_name)
 
-    fixed_color_by_stem: dict[str, list[Path]] = defaultdict(list)
-    symbolic_files: list[Path] = []
+    image_files = [
+        path
+        for path in destination.rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+    ]
+    symbolic_files = [path for path in image_files if is_symbolic_path(path, destination)]
+    dynamic_files = [path for path in image_files if uses_dynamic_theme_color(path)]
 
-    for path in destination.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES:
-            continue
-        if is_symbolic_path(path, destination):
-            symbolic_files.append(path)
-        elif not uses_dynamic_theme_color(path):
+    # Snapshot fixed-color candidates before changing anything. Fixed symbolic
+    # artwork is allowed as a source too: what matters is that its pixels/vector
+    # fills are already independent of the desktop color scheme.
+    fixed_color_by_stem: dict[str, list[Path]] = defaultdict(list)
+    for path in image_files:
+        if not uses_dynamic_theme_color(path):
             fixed_color_by_stem[normalized_stem(path)].append(path)
 
-    replaced = 0
-    unresolved: list[Path] = []
+    reused_fixed = 0
+    synthesized = 0
 
-    for symbolic in symbolic_files:
-        # Some files live under symbolic paths but already contain fixed-color
-        # artwork. They already satisfy the goal and should be left untouched.
-        if not uses_dynamic_theme_color(symbolic):
-            continue
+    for target in dynamic_files:
+        candidates = fixed_color_by_stem.get(normalized_stem(target), [])
+        if candidates:
+            source_icon = max(
+                candidates,
+                key=lambda candidate: candidate_score(target, candidate, destination),
+            )
+            target.unlink()
+            shutil.copy2(source_icon, target)
+            reused_fixed += 1
+        else:
+            synthesize_fixed_color_svg(target)
+            synthesized += 1
 
-        candidates = fixed_color_by_stem.get(normalized_stem(symbolic), [])
-        if not candidates:
-            unresolved.append(symbolic)
-            continue
-
-        source_icon = max(
-            candidates,
-            key=lambda candidate: candidate_score(symbolic, candidate, destination),
+    remaining = [
+        path
+        for path in destination.rglob("*.svg")
+        if path.is_file() and uses_dynamic_theme_color(path)
+    ]
+    if remaining:
+        report = destination / "dynamic-color-icons.txt"
+        report.write_text(
+            "\n".join(str(path.relative_to(destination)) for path in remaining) + "\n",
+            encoding="utf-8",
+        )
+        raise RuntimeError(
+            f"generated theme still contains {len(remaining)} dynamic-color SVGs; "
+            f"see {report}"
         )
 
-        # Keep the symbolic filename because Plasma may request it explicitly,
-        # but feed that request fixed-color artwork instead.
-        symbolic.unlink()
-        shutil.copy2(source_icon, symbolic)
-        replaced += 1
-
-    return len(symbolic_files), replaced, unresolved
+    return BuildStats(
+        symbolic_files=len(symbolic_files),
+        dynamic_before=len(dynamic_files),
+        reused_fixed=reused_fixed,
+        synthesized=synthesized,
+        dynamic_remaining=0,
+    )
 
 
 def main() -> int:
@@ -242,28 +365,17 @@ def main() -> int:
     destination = output_root / theme_name
 
     try:
-        total, replaced, unresolved = build_theme(source, destination, display_name)
+        stats = build_theme(source, destination, display_name)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    already_fixed = total - replaced - len(unresolved)
-    report = destination / "unresolved-symbolic-icons.txt"
-    if unresolved:
-        report.write_text(
-            "\n".join(str(path.relative_to(destination)) for path in unresolved) + "\n",
-            encoding="utf-8",
-        )
-    elif report.exists():
-        report.unlink()
-
-    print(f"Created:       {destination}")
-    print(f"Symbolic:      {total}")
-    print(f"Already fixed: {already_fixed}")
-    print(f"Replaced:      {replaced}")
-    print(f"Unresolved:    {len(unresolved)}")
-    if unresolved:
-        print(f"Report:        {report}")
+    print(f"Created:           {destination}")
+    print(f"Symbolic files:    {stats.symbolic_files}")
+    print(f"Dynamic before:    {stats.dynamic_before}")
+    print(f"Reused fixed art:  {stats.reused_fixed}")
+    print(f"Colorized fallback:{stats.synthesized:>5}")
+    print(f"Dynamic remaining: {stats.dynamic_remaining}")
     return 0
 
 
