@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
-"""Build a Papirus variant that prefers existing colorful Papirus artwork.
+"""Build Papirus variants without theme-driven monochrome artwork.
 
-KDE Plasma may explicitly request ``*-symbolic`` icons. This generator keeps
-those symbolic filenames so Plasma can still find them, but when Papirus already
-contains a fixed-color icon with the same semantic name, the symbolic file is
-replaced by a byte-for-byte copy of that existing Papirus artwork.
+The generator follows two rules, in this order:
 
-No colors are invented, synthesized, or baked into symbolic artwork. If Papirus
-has no fixed-color counterpart for a symbolic icon, that icon is left exactly as
-it was in the source theme.
+1. If the selected Papirus variant already contains fixed-color artwork with the
+   same semantic icon name, copy that artwork exactly. Because Papirus,
+   Papirus-Dark and Papirus-Light are generated separately, a light/dark-specific
+   colored variant is automatically preferred for its matching theme.
+2. If no fixed-color counterpart exists, keep the original SVG geometry and bake
+   Papirus' own semantic color palette into the dynamic ``currentColor`` /
+   ``context-fill`` / ``context-stroke`` artwork. Existing ColorScheme semantic
+   classes (positive, negative, warning, highlight) are respected. Plain
+   ColorScheme-Text UI icons are assigned a semantic color from their icon name.
 
-Papirus-Dark contains relative symlinks into the sibling Papirus theme. The
-output dereferences those links so the generated user theme is self-contained.
+This applies to every dynamic SVG, not only files named ``*-symbolic``. That is
+important for KDE action/menu icons such as system-suspend, system-reboot and
+window-pin, which are normal icon names but still use currentColor.
+
+Papirus-Dark and Papirus-Light contain relative symlinks into sibling themes.
+The output dereferences those links so each generated user theme is standalone.
 """
 
 from __future__ import annotations
@@ -41,11 +48,26 @@ KNOWN_CONTEXTS = {
 
 IMAGE_SUFFIXES = {".svg", ".png", ".xpm"}
 DYNAMIC_COLOR_MARKERS = ("currentcolor", "context-fill", "context-stroke")
+PALETTE_KEYS = ("Text", "Highlight", "NeutralText", "PositiveText", "NegativeText")
+
+# Match Papirus' embedded KDE color-scheme fallback declarations, e.g.
+# .ColorScheme-NegativeText { color:#f44336; }
+PALETTE_RE = re.compile(
+    r"\.ColorScheme-(Text|Highlight|NeutralText|PositiveText|NegativeText)\s*"
+    r"\{[^}]*?color\s*:\s*(#[0-9a-fA-F]{6,8})",
+    re.IGNORECASE | re.DOTALL,
+)
+
+START_TAG_RE = re.compile(
+    r"<(?![!?/])(?P<tag>[A-Za-z_][\w:.-]*)(?P<attrs>[^<>]*)>",
+    re.DOTALL,
+)
+CLASS_ATTR_RE = re.compile(r"\bclass\s*=\s*([\"'])(?P<value>.*?)\1", re.DOTALL)
 
 
 @dataclass(frozen=True)
 class Replacement:
-    """One generated file and the existing Papirus file copied into it."""
+    """One generated target replaced with existing fixed-color Papirus artwork."""
 
     target: str
     source: str
@@ -53,12 +75,15 @@ class Replacement:
 
 @dataclass(frozen=True)
 class BuildStats:
+    theme: str
     symbolic_files: int
-    symbolic_dynamic_before: int
+    dynamic_before: int
     reused_existing_color: int
-    left_unchanged: int
-    symbolic_dynamic_remaining: int
+    recolored_semantic: int
+    dynamic_remaining: int
     replacements: tuple[Replacement, ...]
+    recolored: tuple[str, ...]
+    palette: tuple[tuple[str, str], ...]
 
 
 def is_symbolic_part(part: str) -> bool:
@@ -75,7 +100,7 @@ def is_symbolic_path(path: Path, root: Path) -> bool:
 
 
 def uses_dynamic_theme_color(path: Path) -> bool:
-    """Return True if an SVG asks the desktop theme to provide its color."""
+    """Return True if an SVG asks the desktop theme to provide visible color."""
     if path.suffix.lower() != ".svg":
         return False
 
@@ -88,7 +113,7 @@ def uses_dynamic_theme_color(path: Path) -> bool:
 
 
 def normalized_stem(path: Path) -> str:
-    """Normalize symbolic naming without guessing unrelated icon aliases."""
+    """Normalize the symbolic suffix while preserving the semantic icon name."""
     stem = path.stem
     stem = stem.replace(".symbolic", "")
     stem = re.sub(r"-symbolic$", "", stem)
@@ -112,7 +137,7 @@ def context_key(path: Path, root: Path) -> str | None:
 
 
 def candidate_score(target: Path, candidate: Path, root: Path) -> int:
-    """Prefer the closest existing Papirus counterpart; never alter artwork."""
+    """Prefer the closest fixed-color artwork from the selected theme variant."""
     score = 0
 
     target_size, target_scale = size_key(target, root)
@@ -134,6 +159,10 @@ def candidate_score(target: Path, candidate: Path, root: Path) -> int:
     if target_scale == candidate_scale:
         score += 500
 
+    # Prefer matching symbolic/non-symbolic style when both options exist.
+    if is_symbolic_path(target, root) == is_symbolic_path(candidate, root):
+        score += 400
+
     if candidate.suffix.lower() == ".svg":
         score += 300
 
@@ -143,13 +172,182 @@ def candidate_score(target: Path, candidate: Path, root: Path) -> int:
     return score
 
 
+def extract_palette(text: str) -> dict[str, str]:
+    """Extract the fixed fallback colors already embedded in Papirus SVGs."""
+    palette: dict[str, str] = {}
+    for key, color in PALETTE_RE.findall(text):
+        canonical = next((item for item in PALETTE_KEYS if item.lower() == key.lower()), key)
+        palette.setdefault(canonical, color.lower())
+    return palette
+
+
+def discover_theme_palette(root: Path) -> dict[str, str]:
+    """Discover the selected variant's own KDE fallback palette from its SVGs."""
+    palette: dict[str, str] = {}
+
+    for path in root.rglob("*.svg"):
+        if not path.is_file():
+            continue
+        try:
+            found = extract_palette(path.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+        for key, color in found.items():
+            palette.setdefault(key, color)
+        if all(key in palette for key in PALETTE_KEYS):
+            break
+
+    missing = [key for key in PALETTE_KEYS if key not in palette]
+    if missing:
+        raise ValueError(
+            f"Could not discover complete Papirus palette in {root}; missing: {', '.join(missing)}"
+        )
+
+    return palette
+
+
+def semantic_palette_key(path: Path) -> str:
+    """Choose a Papirus semantic color for otherwise plain ColorScheme-Text art."""
+    name = normalized_stem(path)
+
+    # Destructive / failure actions.
+    negative = (
+        "delete",
+        "remove",
+        "trash",
+        "close",
+        "cancel",
+        "shutdown",
+        "power-off",
+        "poweroff",
+        "log-out",
+        "logout",
+        "uninstall",
+        "disconnect",
+        "disconnected",
+        "reject",
+        "forbid",
+        "denied",
+        "error",
+        "failed",
+        "failure",
+        "broken",
+        "erase",
+    )
+
+    # Constructive / success actions.
+    positive = (
+        "add",
+        "create",
+        "insert",
+        "apply",
+        "accept",
+        "confirm",
+        "save",
+        "log-in",
+        "login",
+        "install",
+        "connect",
+        "connected",
+        "enable",
+        "start",
+        "resume",
+        "unlock",
+    )
+
+    # Paused/attention/favorite state: Papirus' NeutralText orange.
+    neutral = (
+        "suspend",
+        "hibernate",
+        "sleep",
+        "pause",
+        "warning",
+        "caution",
+        "attention",
+        "favorite",
+        "bookmark",
+        "starred",
+        "pin",
+        "locked",
+    )
+
+    if any(token in name for token in negative):
+        return "NegativeText"
+    if any(token in name for token in positive):
+        return "PositiveText"
+    if any(token in name for token in neutral):
+        return "NeutralText"
+
+    # Navigation, editing, settings, restart, information and generic UI actions
+    # use Papirus' Highlight blue rather than falling back to monochrome Text.
+    return "Highlight"
+
+
+def class_palette_key(tag_text: str) -> str | None:
+    """Read an element's explicit ColorScheme semantic class, if it has one."""
+    class_match = CLASS_ATTR_RE.search(tag_text)
+    if not class_match:
+        return None
+
+    classes = class_match.group("value").split()
+    for key in ("NegativeText", "PositiveText", "NeutralText", "Highlight", "Text"):
+        wanted = f"ColorScheme-{key}".lower()
+        if any(item.lower() == wanted for item in classes):
+            return key
+    return None
+
+
+def replace_dynamic_markers(text: str, path: Path, palette: dict[str, str]) -> str:
+    """Bake Papirus semantic colors into one SVG without changing its geometry."""
+    default_key = semantic_palette_key(path)
+    default_color = palette[default_key]
+
+    def replace_tag(match: re.Match[str]) -> str:
+        tag_text = match.group(0)
+        lowered = tag_text.lower()
+        if not any(marker in lowered for marker in DYNAMIC_COLOR_MARKERS):
+            return tag_text
+
+        explicit_key = class_palette_key(tag_text)
+        # Plain ColorScheme-Text means "normal foreground" upstream. For the
+        # colorful variant, use the icon-name semantic color instead. Explicit
+        # warning/success/error/highlight classes keep their Papirus meaning.
+        key = explicit_key if explicit_key and explicit_key != "Text" else default_key
+        color = palette[key]
+
+        result = re.sub(r"currentColor", color, tag_text, flags=re.IGNORECASE)
+        result = re.sub(r"context-fill", color, result, flags=re.IGNORECASE)
+        result = re.sub(r"context-stroke", color, result, flags=re.IGNORECASE)
+        return result
+
+    result = START_TAG_RE.sub(replace_tag, text)
+
+    # Catch unusual CSS/text forms not located directly in an element start tag.
+    # They receive the icon's default semantic color so no dynamic marker can
+    # survive into the generated theme.
+    result = re.sub(r"currentColor", default_color, result, flags=re.IGNORECASE)
+    result = re.sub(r"context-fill", default_color, result, flags=re.IGNORECASE)
+    result = re.sub(r"context-stroke", default_color, result, flags=re.IGNORECASE)
+    return result
+
+
+def recolor_dynamic_svg(path: Path, palette: dict[str, str]) -> None:
+    """Bake fixed semantic colors into a dynamic SVG in place."""
+    original = path.read_text(encoding="utf-8", errors="strict")
+    changed = replace_dynamic_markers(original, path, palette)
+    path.write_text(changed, encoding="utf-8")
+
+    if uses_dynamic_theme_color(path):
+        raise ValueError(f"Dynamic color marker survived recoloring: {path}")
+
+
 def rewrite_index_theme(index_path: Path, display_name: str) -> None:
-    """Rename the generated theme while preserving Papirus inheritance."""
+    """Rename the generated theme while preserving its original inheritance."""
     text = index_path.read_text(encoding="utf-8", errors="replace")
     text = re.sub(r"(?m)^Name=.*$", f"Name={display_name}", text, count=1)
     text = re.sub(
         r"(?m)^Comment=.*$",
-        "Comment=Papirus symbolic names backed by existing colorful Papirus artwork where available",
+        "Comment=Papirus with fixed colorful UI, action, status and symbolic artwork",
         text,
         count=1,
     )
@@ -168,9 +366,8 @@ def build_theme(source: Path, destination: Path, display_name: str) -> BuildStat
 
     destination.parent.mkdir(parents=True, exist_ok=True)
 
-    # Papirus-Dark contains relative symlinks into the sibling Papirus theme.
-    # Dereferencing them also gives us a complete snapshot from which existing
-    # fixed-color counterparts can be selected.
+    # Dereference Papirus-Dark/Papirus-Light links so each generated theme keeps
+    # the exact source variant overrides and becomes self-contained.
     shutil.copytree(source, destination, symlinks=False)
     rewrite_index_theme(destination / "index.theme", display_name)
 
@@ -180,48 +377,60 @@ def build_theme(source: Path, destination: Path, display_name: str) -> BuildStat
         if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
     ]
     symbolic_files = [path for path in image_files if is_symbolic_path(path, destination)]
-    symbolic_dynamic = [path for path in symbolic_files if uses_dynamic_theme_color(path)]
+    dynamic_files = [path for path in image_files if uses_dynamic_theme_color(path)]
 
-    # Snapshot all existing fixed-color artwork before replacing anything.
-    # A candidate is valid only when it already exists in Papirus and does not
-    # depend on currentColor/context-fill/context-stroke.
+    palette = discover_theme_palette(destination)
+
+    # Snapshot every pre-existing fixed-color icon before changing any targets.
+    # This guarantees candidate selection cannot accidentally reuse a colorized
+    # file produced earlier in the same build.
     fixed_color_by_stem: dict[str, list[Path]] = defaultdict(list)
     for path in image_files:
         if not uses_dynamic_theme_color(path):
             fixed_color_by_stem[normalized_stem(path)].append(path)
 
     replacements: list[Replacement] = []
+    recolored: list[str] = []
 
-    for target in symbolic_dynamic:
+    for target in dynamic_files:
         candidates = fixed_color_by_stem.get(normalized_stem(target), [])
-        if not candidates:
-            # This is intentional: keep the original symbolic icon unchanged.
+
+        if candidates:
+            source_icon = max(
+                candidates,
+                key=lambda candidate: candidate_score(target, candidate, destination),
+            )
+            target_rel = str(target.relative_to(destination))
+            source_rel = str(source_icon.relative_to(destination))
+            source_bytes = source_icon.read_bytes()
+
+            target.unlink()
+            target.write_bytes(source_bytes)
+            shutil.copystat(source_icon, target)
+            replacements.append(Replacement(target=target_rel, source=source_rel))
             continue
 
-        source_icon = max(
-            candidates,
-            key=lambda candidate: candidate_score(target, candidate, destination),
-        )
+        # No real colored counterpart exists in this Papirus variant. Preserve
+        # the exact SVG paths/shapes and only replace its theme-supplied colors.
+        recolor_dynamic_svg(target, palette)
+        recolored.append(str(target.relative_to(destination)))
 
-        target_rel = str(target.relative_to(destination))
-        source_rel = str(source_icon.relative_to(destination))
-        source_bytes = source_icon.read_bytes()
-
-        # Copy the existing file exactly. No SVG parsing or recoloring happens.
-        target.unlink()
-        target.write_bytes(source_bytes)
-        shutil.copystat(source_icon, target)
-        replacements.append(Replacement(target=target_rel, source=source_rel))
-
-    remaining = [path for path in symbolic_files if uses_dynamic_theme_color(path)]
+    remaining = [
+        path
+        for path in destination.rglob("*.svg")
+        if path.is_file() and uses_dynamic_theme_color(path)
+    ]
 
     return BuildStats(
+        theme=source.name,
         symbolic_files=len(symbolic_files),
-        symbolic_dynamic_before=len(symbolic_dynamic),
+        dynamic_before=len(dynamic_files),
         reused_existing_color=len(replacements),
-        left_unchanged=len(symbolic_dynamic) - len(replacements),
-        symbolic_dynamic_remaining=len(remaining),
+        recolored_semantic=len(recolored),
+        dynamic_remaining=len(remaining),
         replacements=tuple(replacements),
+        recolored=tuple(recolored),
+        palette=tuple((key, palette[key]) for key in PALETTE_KEYS),
     )
 
 
@@ -259,13 +468,14 @@ def main() -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"Created:                       {destination}")
-    print(f"Symbolic files:                {stats.symbolic_files}")
-    print(f"Dynamic symbolic before:       {stats.symbolic_dynamic_before}")
-    print(f"Reused existing color artwork: {stats.reused_existing_color}")
-    print(f"Left unchanged (no color art): {stats.left_unchanged}")
-    print(f"Dynamic symbolic remaining:    {stats.symbolic_dynamic_remaining}")
-    print("Synthesized/recolored:          0")
+    print(f"Created:                   {destination}")
+    print(f"Source variant:            {stats.theme}")
+    print(f"Symbolic files:            {stats.symbolic_files}")
+    print(f"Dynamic SVGs before:       {stats.dynamic_before}")
+    print(f"Existing color art reused: {stats.reused_existing_color}")
+    print(f"Semantic recolors:         {stats.recolored_semantic}")
+    print(f"Dynamic SVGs remaining:    {stats.dynamic_remaining}")
+    print("Palette:                   " + ", ".join(f"{key}={value}" for key, value in stats.palette))
     return 0
 
 

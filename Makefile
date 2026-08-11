@@ -24,11 +24,21 @@ $(ICON_THEMES):
 uninstall:
 	-rm -rf $(foreach icon_theme,$(ICON_THEMES),"$(DESTDIR)$(PREFIX)/share/icons/$(icon_theme)")
 
-# Build Xef's user-local Papirus variant that replaces symbolic artwork with
-# matching colorful Papirus icons where possible.
-.PHONY: colorful
-colorful:
+# Xef's user-local colorful variants. Keep `make colorful` as the convenient
+# dark-theme default used by the existing setup.
+.PHONY: colorful colorful-dark colorful-light colorful-normal colorful-all
+colorful: colorful-dark
+
+colorful-dark:
 	python3 tools/make-colorful-theme.py --source Papirus-Dark
+
+colorful-light:
+	python3 tools/make-colorful-theme.py --source Papirus-Light
+
+colorful-normal:
+	python3 tools/make-colorful-theme.py --source Papirus
+
+colorful-all: colorful-normal colorful-dark colorful-light
 
 _get_version:
 	$(eval VERSION := $(shell git show -s --format=%cd --date=format:%Y%m%d HEAD))
@@ -67,7 +77,7 @@ test_long: test_xml_struct
 
 .PHONY: test_colorful_generator
 test_colorful_generator:
-	# >>> Testing colorful symbolic theme generator (fixture + real Papirus-Dark)
+	# >>> Testing colorful generator (Papirus + Dark + Light + KDE action regressions)
 	python3 tools/test-colorful-theme.py
 
 .PHONY: test_rendering_glitches
