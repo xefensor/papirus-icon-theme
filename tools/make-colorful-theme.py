@@ -262,6 +262,10 @@ def generated_color_family(path: Path) -> str:
             "muted",
             "mute",
             "cancel",
+            "close",
+            "stop",
+            "log-out",
+            "logout",
             "reject",
             "forbid",
             "denied",
@@ -274,6 +278,46 @@ def generated_color_family(path: Path) -> str:
         ),
     ):
         return "red"
+
+    # Restart/session are neutral system actions. Check them before positive
+    # tokens so "restart" cannot accidentally match "start".
+    if _contains_any(
+        name,
+        (
+            "reboot",
+            "restart",
+            "session",
+            "switch-user",
+            "user-switch",
+        ),
+    ):
+        return "blue"
+
+    # Constructive actions are green. Keep this before amber so "unlock" does
+    # not accidentally match the "lock" attention token.
+    if _contains_any(
+        name,
+        (
+            "list-add",
+            "add",
+            "create",
+            "new",
+            "insert",
+            "apply",
+            "accept",
+            "confirm",
+            "save",
+            "install",
+            "enable",
+            "start",
+            "resume",
+            "unlock",
+            "success",
+            "okay",
+            "dialog-ok",
+        ),
+    ):
+        return "green"
 
     # Sleep/hold/attention/marked states form one amber family.
     if _contains_any(
@@ -300,32 +344,6 @@ def generated_color_family(path: Path) -> str:
         ),
     ):
         return "amber"
-
-    # Constructive actions are green. Device identities with the word
-    # "connected" are kept blue below; only explicit connect actions are green.
-    if _contains_any(
-        name,
-        (
-            "list-add",
-            "add",
-            "create",
-            "new",
-            "insert",
-            "apply",
-            "accept",
-            "confirm",
-            "save",
-            "install",
-            "enable",
-            "start",
-            "resume",
-            "unlock",
-            "success",
-            "okay",
-            "dialog-ok",
-        ),
-    ):
-        return "green"
 
     # Connection actions are green, but connected *status identities* stay blue
     # with their network/audio/Bluetooth family.
