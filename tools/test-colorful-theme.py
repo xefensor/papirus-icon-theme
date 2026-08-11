@@ -79,10 +79,16 @@ class ColorfulThemeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             destination = Path(temp_dir) / "Papirus-Dark-Colorful"
-            total, replaced, _unmatched = generator.build_theme(
+            total, replaced, unmatched = generator.build_theme(
                 source,
                 destination,
                 "Papirus-Dark Colorful Test",
+            )
+
+            print(
+                f"REAL Papirus-Dark result: symbolic={total}, "
+                f"replaced={replaced}, unmatched={len(unmatched)}",
+                flush=True,
             )
 
             self.assertGreater(total, 0, "real Papirus-Dark build found zero symbolic icons")
