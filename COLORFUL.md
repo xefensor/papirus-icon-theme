@@ -25,18 +25,18 @@ Generated fallbacks use four semantic color families plus a theme-aware neutral 
 - **Red** — remove/delete/uninstall/disable/disconnect/shutdown/cancel/close/error/critical/muted states.
 - **Neutral** — ambiguous/general UI icons where color would imply meaning that is not actually present.
 
-The semantic hues come from `tools/work/examples-papirus.svg`. Generated semantic colors cap HLS saturation at 58%, which keeps them a little softer than full Papirus artwork without making them look washed out.
+The semantic hues come from `tools/work/examples-papirus.svg`. Generated semantic colors now cap HLS saturation at 72%, with tiny family-specific lightness lifts for blue, amber and red. This keeps them close to surrounding full-color Papirus artwork while still avoiding the most extreme saturation of the source anchors.
 
 Current generated semantic palette:
 
 ```text
-blue  #508dd1
+blue  #4a91e1
 green #4bae4f
-amber #c57d34
-red   #ba3b32
+amber #dc8225
+red   #c6362b
 ```
 
-Neutral fallback colors are variant-aware:
+Neutral fallback colors are variant-aware and unchanged:
 
 ```text
 Papirus-Dark  #cccccc

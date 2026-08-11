@@ -10,13 +10,13 @@ Generated fallbacks should be close in visual strength to surrounding Papirus ar
 
 ## Generated semantic palette
 
-Generated semantic colors are derived from the Papirus example palette in `tools/work/examples-papirus.svg`. The example hue and lightness are preserved, while HLS saturation is capped at **58%**. This still softens the most saturated example colors but avoids the washed-out look produced by the earlier 45% cap.
+Generated semantic colors are derived from the Papirus example palette in `tools/work/examples-papirus.svg`. The example hue is preserved, HLS saturation is capped at **72%**, and only tiny family-specific lightness lifts are applied to the generated-only blue, amber, and red. This keeps the generated UI glyphs close to real Papirus color strength without copying the most extreme saturation of the full artwork.
 
 ```text
-blue  #508dd1
-green #4bae4f
-amber #c57d34
-red   #ba3b32
+blue  #4a91e1  (+0.020 lightness)
+green #4bae4f  (unchanged)
+amber #dc8225  (+0.015 lightness)
+red   #c6362b  (+0.010 lightness)
 ```
 
 - **Blue** — explicitly neutral/system/device information: edit/configure/settings, audio, display, network, Bluetooth, restart/session, navigation.

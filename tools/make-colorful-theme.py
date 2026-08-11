@@ -65,19 +65,27 @@ DESIGN_COLORS = {
 }
 DESIGN_EFFECT_COLORS = {"shadow": "#000000", "highlight": "#ffffff"}
 
-# The previous 45% cap made generated icons noticeably duller than surrounding
-# Papirus artwork. 58% keeps the design-example hue/lightness, while still
-# softening the most saturated source colors enough for small UI glyphs.
-GENERATED_SATURATION_CAP = 0.58
+# Generated semantic colors should sit close to full Papirus artwork instead of
+# looking dusty or washed out. Keep the original Papirus hue, cap only the most
+# extreme saturation, and apply tiny family-specific lightness lifts where the
+# small UI glyph otherwise looks darker than neighboring fixed-color icons.
+GENERATED_SATURATION_CAP = 0.72
+GENERATED_LIGHTNESS_LIFTS = {
+    "blue": 0.020,
+    "green": 0.000,
+    "amber": 0.015,
+    "red": 0.010,
+}
 
 
-def _muted_example_color(color: str) -> str:
+def _muted_example_color(color: str, lightness_lift: float = 0.0) -> str:
     value = color.lstrip("#")
     r, g, b = (int(value[i : i + 2], 16) / 255 for i in (0, 2, 4))
     hue, lightness, saturation = colorsys.rgb_to_hls(r, g, b)
+    tuned_lightness = min(0.72, lightness + lightness_lift)
     r2, g2, b2 = colorsys.hls_to_rgb(
         hue,
-        lightness,
+        tuned_lightness,
         min(saturation, GENERATED_SATURATION_CAP),
     )
     return f"#{round(r2 * 255):02x}{round(g2 * 255):02x}{round(b2 * 255):02x}"
@@ -86,10 +94,18 @@ def _muted_example_color(color: str) -> str:
 # Only generated fallbacks use this palette. Existing fixed-color Papirus art is
 # copied byte-for-byte and can use the complete upstream palette.
 GENERATED_COLORS = {
-    "blue": _muted_example_color(DESIGN_COLORS["blue"]),
-    "green": _muted_example_color(DESIGN_COLORS["green"]),
-    "amber": _muted_example_color(DESIGN_COLORS["orange"]),
-    "red": _muted_example_color(DESIGN_COLORS["red"]),
+    "blue": _muted_example_color(
+        DESIGN_COLORS["blue"], GENERATED_LIGHTNESS_LIFTS["blue"]
+    ),
+    "green": _muted_example_color(
+        DESIGN_COLORS["green"], GENERATED_LIGHTNESS_LIFTS["green"]
+    ),
+    "amber": _muted_example_color(
+        DESIGN_COLORS["orange"], GENERATED_LIGHTNESS_LIFTS["amber"]
+    ),
+    "red": _muted_example_color(
+        DESIGN_COLORS["red"], GENERATED_LIGHTNESS_LIFTS["red"]
+    ),
 }
 
 # Unknown/ambiguous generated icons should stay visually neutral. Use a light
