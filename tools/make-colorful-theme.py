@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Create a Papirus variant whose symbolic icon names resolve to colorful artwork.
+"""Create a Papirus variant whose symbolic icon names resolve to fixed-color artwork.
 
 KDE Plasma may explicitly request icons ending in ``-symbolic``. Removing the
 symbolic directories is not enough because icon-theme inheritance can then fall
 back to another monochrome theme. This tool keeps the symbolic filenames KDE
-asks for, but replaces their contents with the closest normal Papirus icon when
-one exists.
+asks for, but replaces dynamic/currentColor artwork with fixed-color Papirus
+artwork when a matching icon exists.
 
 The source theme is copied with symlinks dereferenced, so Papirus-Dark's links
 back into Papirus become a self-contained generated theme.
@@ -48,6 +48,31 @@ def is_symbolic_path(path: Path, root: Path) -> bool:
         "-symbolic" in path.stem
         or ".symbolic" in path.name
         or any(is_symbolic_part(part) for part in rel.parts[:-1])
+    )
+
+
+def uses_dynamic_theme_color(path: Path) -> bool:
+    """Return True for SVG artwork whose visible color is supplied by the theme.
+
+    A non-symbolic filename is not enough: Papirus has files such as
+    22x22/panel/audio-volume-high.svg which still use ``currentColor`` and KDE
+    ColorScheme classes. Those remain monochrome in Plasma and must not be used
+    as the colorful replacement source.
+    """
+    if path.suffix.lower() != ".svg":
+        return False
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return True
+
+    lowered = text.lower()
+    return (
+        "currentcolor" in lowered
+        or "colorscheme-" in lowered
+        or "context-fill" in lowered
+        or "context-stroke" in lowered
     )
 
 
@@ -112,7 +137,7 @@ def rewrite_index_theme(index_path: Path, display_name: str) -> None:
     text = re.sub(r"(?m)^Name=.*$", f"Name={display_name}", text, count=1)
     text = re.sub(
         r"(?m)^Comment=.*$",
-        "Comment=Papirus with colorful artwork for symbolic icon requests",
+        "Comment=Papirus with fixed-color artwork for symbolic icon requests",
         text,
         count=1,
     )
@@ -145,15 +170,11 @@ def build_theme(source: Path, destination: Path, display_name: str) -> tuple[int
     # self-contained. Do NOT use ignore_dangling_symlinks=True here: Python's
     # copytree checks relative link targets in a way that causes valid Papirus
     # links such as ../../Papirus/22x22/symbolic to be skipped entirely.
-    shutil.copytree(
-        source,
-        destination,
-        symlinks=False,
-    )
+    shutil.copytree(source, destination, symlinks=False)
 
     rewrite_index_theme(destination / "index.theme", display_name)
 
-    normal_by_stem: dict[str, list[Path]] = defaultdict(list)
+    fixed_color_by_stem: dict[str, list[Path]] = defaultdict(list)
     symbolic_files: list[Path] = []
 
     for path in destination.rglob("*"):
@@ -161,16 +182,21 @@ def build_theme(source: Path, destination: Path, display_name: str) -> tuple[int
             continue
         if is_symbolic_path(path, destination):
             symbolic_files.append(path)
-        else:
-            normal_by_stem[normalized_stem(path)].append(path)
+        elif not uses_dynamic_theme_color(path):
+            fixed_color_by_stem[normalized_stem(path)].append(path)
 
     replaced = 0
-    unmatched: list[Path] = []
+    unresolved: list[Path] = []
 
     for symbolic in symbolic_files:
-        candidates = normal_by_stem.get(normalized_stem(symbolic), [])
+        # Some files live under symbolic paths but already contain fixed-color
+        # artwork. They already satisfy the goal and should be left untouched.
+        if not uses_dynamic_theme_color(symbolic):
+            continue
+
+        candidates = fixed_color_by_stem.get(normalized_stem(symbolic), [])
         if not candidates:
-            unmatched.append(symbolic)
+            unresolved.append(symbolic)
             continue
 
         source_icon = max(
@@ -178,14 +204,13 @@ def build_theme(source: Path, destination: Path, display_name: str) -> tuple[int
             key=lambda candidate: candidate_score(symbolic, candidate, destination),
         )
 
-        # Replace the symbolic artwork while intentionally keeping the original
-        # symbolic filename. Plasma still gets the name it requested, but the
-        # pixels/vector paths are the normal colorful Papirus artwork.
+        # Keep the symbolic filename because Plasma may request it explicitly,
+        # but feed that request fixed-color artwork instead.
         symbolic.unlink()
         shutil.copy2(source_icon, symbolic)
         replaced += 1
 
-    return len(symbolic_files), replaced, unmatched
+    return len(symbolic_files), replaced, unresolved
 
 
 def main() -> int:
@@ -217,26 +242,28 @@ def main() -> int:
     destination = output_root / theme_name
 
     try:
-        total, replaced, unmatched = build_theme(source, destination, display_name)
+        total, replaced, unresolved = build_theme(source, destination, display_name)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    report = destination / "unmatched-symbolic-icons.txt"
-    if unmatched:
+    already_fixed = total - replaced - len(unresolved)
+    report = destination / "unresolved-symbolic-icons.txt"
+    if unresolved:
         report.write_text(
-            "\n".join(str(path.relative_to(destination)) for path in unmatched) + "\n",
+            "\n".join(str(path.relative_to(destination)) for path in unresolved) + "\n",
             encoding="utf-8",
         )
     elif report.exists():
         report.unlink()
 
-    print(f"Created:   {destination}")
-    print(f"Symbolic:  {total}")
-    print(f"Replaced:  {replaced}")
-    print(f"Unmatched: {len(unmatched)}")
-    if unmatched:
-        print(f"Report:    {report}")
+    print(f"Created:       {destination}")
+    print(f"Symbolic:      {total}")
+    print(f"Already fixed: {already_fixed}")
+    print(f"Replaced:      {replaced}")
+    print(f"Unresolved:    {len(unresolved)}")
+    if unresolved:
+        print(f"Report:        {report}")
     return 0
 
 
