@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """Build colorful Papirus variants that follow tools/work/DESIGN.md.
 
-The generator uses the checked-in Papirus design notes as the source of truth.
+The generator treats upstream Papirus artwork and generated fallbacks differently.
 
 Rules:
 1. Existing fixed-color artwork from the selected variant wins unchanged. This
-   preserves any real Papirus/Papirus-Dark/Papirus-Light differences.
-2. Dynamic monochrome SVGs without a fixed-color counterpart keep their original
-   geometry and are redrawn as a simple Papirus-style colored base:
-   - colors come only from tools/work/examples-papirus.svg;
-   - no gradients are introduced;
-   - 22/24px icons get a 0.5px black 20% shadow and white 20% highlight;
-   - 32/48/64px icons get the same effects at 1px;
-   - 16px icons get no generated shadow/highlight, matching DESIGN.md;
-   - semantic KDE classes (positive/negative/neutral/highlight) are respected.
-3. Plain ColorScheme-Text action icons use a small semantic mapping made only
-   from the design example colors. No ad-hoc hex colors are generated.
+   preserves real Papirus/Papirus-Dark/Papirus-Light differences.
+2. Only icons with no fixed-color counterpart are generated.
+3. Generated icons keep their original geometry, use a small unified semantic
+   color system derived from tools/work/examples-papirus.svg, and are deliberately
+   less saturated than the example anchors so they do not overpower real Papirus
+   artwork.
+4. Function and category decide the generated family consistently:
+   blue = neutral/system/device, green = positive, amber = attention/paused,
+   red = destructive/error.
+5. DESIGN.md shadow/highlight and size rules are applied without gradients.
 
 Papirus-Dark and Papirus-Light contain relative symlinks into sibling themes.
 The output dereferences those links so each generated user theme is standalone.
@@ -24,11 +23,12 @@ The output dereferences those links so each generated user theme is standalone.
 from __future__ import annotations
 
 import argparse
+import colorsys
 import re
 import shutil
 import sys
 import xml.etree.ElementTree as ET
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,8 +67,35 @@ DESIGN_COLORS = {
 }
 DESIGN_EFFECT_COLORS = {"shadow": "#000000", "highlight": "#ffffff"}
 
-# Hard brightness-limit examples stated in DESIGN.md. These are documented for
-# tests/reporting; generated base colors come from DESIGN_COLORS above.
+# Generated UI fallbacks must be quieter than full Papirus artwork.
+# Keep the source hue/lightness, cap only HLS saturation. This means the palette
+# remains derived from Papirus' example colors rather than introducing unrelated
+# hues. Green is already below the cap and therefore remains unchanged.
+GENERATED_SATURATION_CAP = 0.45
+
+
+def _muted_example_color(color: str) -> str:
+    value = color.lstrip("#")
+    r, g, b = (int(value[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    hue, lightness, saturation = colorsys.rgb_to_hls(r, g, b)
+    r2, g2, b2 = colorsys.hls_to_rgb(
+        hue,
+        lightness,
+        min(saturation, GENERATED_SATURATION_CAP),
+    )
+    return f"#{round(r2 * 255):02x}{round(g2 * 255):02x}{round(b2 * 255):02x}"
+
+
+# Deliberately only four generated semantic families. Existing Papirus artwork
+# may of course use the full upstream palette; it is copied unchanged.
+GENERATED_COLORS = {
+    "blue": _muted_example_color(DESIGN_COLORS["blue"]),
+    "green": _muted_example_color(DESIGN_COLORS["green"]),
+    "amber": _muted_example_color(DESIGN_COLORS["orange"]),
+    "red": _muted_example_color(DESIGN_COLORS["red"]),
+}
+
+# Hard brightness-limit examples stated in DESIGN.md.
 DESIGN_BRIGHT_LIMIT = "#e4e4e4"
 DESIGN_DARK_LIMIT = "#4f4f4f"
 
@@ -78,6 +105,7 @@ START_TAG_RE = re.compile(
 )
 CLASS_ATTR_RE = re.compile(r"\bclass\s*=\s*([\"'])(?P<value>.*?)\1", re.DOTALL)
 HEX_RE = re.compile(r"#[0-9a-fA-F]{6,8}")
+BATTERY_LEVEL_RE = re.compile(r"(?:battery|power).*?(?:level[-_]?)(\d{1,3})")
 
 
 @dataclass(frozen=True)
@@ -98,6 +126,7 @@ class BuildStats:
     dynamic_remaining: int
     replacements: tuple[Replacement, ...]
     designed: tuple[str, ...]
+    family_counts: tuple[tuple[str, int], ...]
 
 
 def is_symbolic_part(part: str) -> bool:
@@ -185,104 +214,242 @@ def candidate_score(target: Path, candidate: Path, root: Path) -> int:
     return score
 
 
-def semantic_design_color(path: Path) -> str:
-    """Choose a base color from the Papirus DESIGN example palette.
+def _contains_any(name: str, tokens: tuple[str, ...]) -> bool:
+    return any(token in name for token in tokens)
 
-    This mapping is intentionally small. It provides visual semantics for KDE
-    action icons whose upstream class is only ColorScheme-Text, while never
-    creating a color outside the checked-in Papirus design example.
+
+def generated_color_family(path: Path) -> str:
+    """Return the unified semantic family for a generated-only fallback.
+
+    This is intentionally based on both function and icon category. Related
+    controls therefore keep the same family instead of receiving one-off colors.
     """
     name = normalized_stem(path)
+    parts = {part.lower() for part in path.parts}
+    context = next((part for part in KNOWN_CONTEXTS if part in parts), "")
 
-    negative = (
-        "delete",
-        "remove",
-        "trash",
-        "close",
-        "cancel",
-        "shutdown",
-        "power-off",
-        "poweroff",
-        "log-out",
-        "logout",
-        "uninstall",
-        "disconnect",
-        "disconnected",
-        "reject",
-        "forbid",
-        "denied",
-        "error",
-        "failed",
-        "failure",
-        "broken",
-        "erase",
-    )
-    positive = (
-        "add",
-        "create",
-        "insert",
-        "apply",
-        "accept",
-        "confirm",
-        "save",
-        "log-in",
-        "login",
-        "install",
-        "connect",
-        "connected",
-        "enable",
-        "start",
-        "resume",
-        "unlock",
-    )
-    attention = (
-        "suspend",
-        "hibernate",
-        "sleep",
-        "pause",
-        "warning",
-        "caution",
-        "attention",
-        "locked",
-    )
-    favorite = ("favorite", "heart", "love")
-    special = ("pin", "bookmark", "tag", "starred")
+    # Battery is stateful enough to deserve explicit thresholds.
+    if "battery" in name:
+        if _contains_any(name, ("charging", "charged", "full", "good")):
+            return "green"
+        if _contains_any(name, ("critical", "empty", "missing", "error", "failed")):
+            return "red"
+        level = BATTERY_LEVEL_RE.search(name)
+        if level:
+            value = max(0, min(100, int(level.group(1))))
+            if value <= 15:
+                return "red"
+            if value <= 40:
+                return "amber"
+            return "green"
 
-    if any(token in name for token in negative):
-        return DESIGN_COLORS["red"]
-    if any(token in name for token in positive):
-        return DESIGN_COLORS["green"]
-    if any(token in name for token in attention):
-        return DESIGN_COLORS["orange"]
-    if any(token in name for token in favorite):
-        return DESIGN_COLORS["pink"]
-    if any(token in name for token in special):
-        return DESIGN_COLORS["purple"]
+    # Strong state/failure semantics always win over category identity.
+    if _contains_any(
+        name,
+        (
+            "delete",
+            "remove",
+            "trash",
+            "uninstall",
+            "shutdown",
+            "power-off",
+            "poweroff",
+            "disconnect",
+            "disconnected",
+            "disable",
+            "disabled",
+            "offline",
+            "muted",
+            "mute",
+            "cancel",
+            "close",
+            "stop",
+            "log-out",
+            "logout",
+            "reject",
+            "forbid",
+            "denied",
+            "error",
+            "failed",
+            "failure",
+            "broken",
+            "critical",
+            "erase",
+        ),
+    ):
+        return "red"
 
-    return DESIGN_COLORS["blue"]
+    # Restart/session are neutral system actions. Check them before positive
+    # tokens so "restart" cannot accidentally match "start".
+    if _contains_any(
+        name,
+        (
+            "reboot",
+            "restart",
+            "session",
+            "switch-user",
+            "user-switch",
+        ),
+    ):
+        return "blue"
+
+    # Marking/holding actions keep one amber family even when names also contain
+    # generic constructive words such as "new" (e.g. bookmark-new).
+    if _contains_any(
+        name,
+        (
+            "pin",
+            "pinned",
+            "favorite",
+            "favourite",
+            "bookmark",
+            "starred",
+        ),
+    ):
+        return "amber"
+
+    # Constructive actions are green. Keep this before the remaining lock-state
+    # amber tokens so "unlock" does not accidentally match "lock".
+    if _contains_any(
+        name,
+        (
+            "list-add",
+            "add",
+            "create",
+            "new",
+            "insert",
+            "apply",
+            "accept",
+            "confirm",
+            "save",
+            "install",
+            "enable",
+            "start",
+            "resume",
+            "unlock",
+            "success",
+            "okay",
+            "dialog-ok",
+        ),
+    ):
+        return "green"
+
+    # Sleep/hold/attention states form the rest of the amber family.
+    if _contains_any(
+        name,
+        (
+            "suspend",
+            "hibernate",
+            "sleep",
+            "pause",
+            "warning",
+            "caution",
+            "attention",
+            "limited",
+            "degraded",
+            "locked",
+            "lock",
+            "busy",
+        ),
+    ):
+        return "amber"
+
+    # Connection actions are green, but connected *status identities* stay blue
+    # with their network/audio/Bluetooth family.
+    if name.startswith(("network-connect", "bluetooth-connect", "device-connect")):
+        return "green"
+
+    # Explicit neutral/system/device identity family.
+    if _contains_any(
+        name,
+        (
+            "edit",
+            "configure",
+            "configuration",
+            "settings",
+            "preferences",
+            "properties",
+            "info",
+            "information",
+            "open",
+            "tools",
+            "reboot",
+            "restart",
+            "session",
+            "switch-user",
+            "user-switch",
+            "speaker",
+            "audio",
+            "volume",
+            "microphone",
+            "headphone",
+            "display",
+            "monitor",
+            "screen",
+            "network",
+            "wireless",
+            "wifi",
+            "ethernet",
+            "bluetooth",
+            "vpn",
+            "device",
+            "sync",
+            "refresh",
+            "reload",
+            "search",
+            "find",
+            "zoom",
+            "navigate",
+            "go-",
+        ),
+    ):
+        return "blue"
+
+    # Category defaults keep related generated-only icons coherent.
+    if context in {
+        "actions",
+        "panel",
+        "status",
+        "devices",
+        "categories",
+        "places",
+        "apps",
+        "emblems",
+        "emotes",
+        "mimetypes",
+        "animations",
+    }:
+        return "blue"
+
+    return "blue"
 
 
-def class_design_color(tag_text: str) -> str | None:
-    """Map explicit KDE semantic classes onto Papirus design-example colors."""
+def generated_design_color(path: Path) -> str:
+    return GENERATED_COLORS[generated_color_family(path)]
+
+
+def class_generated_family(tag_text: str) -> str | None:
+    """Map explicit KDE semantic classes onto unified generated families."""
     match = CLASS_ATTR_RE.search(tag_text)
     if not match:
         return None
 
     classes = {item.lower() for item in match.group("value").split()}
     if "colorscheme-negativetext" in classes:
-        return DESIGN_COLORS["red"]
+        return "red"
     if "colorscheme-positivetext" in classes:
-        return DESIGN_COLORS["green"]
+        return "green"
     if "colorscheme-neutraltext" in classes:
-        return DESIGN_COLORS["orange"]
+        return "amber"
     if "colorscheme-highlight" in classes:
-        return DESIGN_COLORS["blue"]
+        return "blue"
     return None
 
 
-def replace_dynamic_markers(text: str, path: Path) -> tuple[str, str]:
-    """Replace dynamic markers using only colors allowed by the design notes."""
-    default_color = semantic_design_color(path)
+def replace_dynamic_markers(text: str, path: Path) -> tuple[str, str, str]:
+    """Replace dynamic markers with the generated family color."""
+    default_family = generated_color_family(path)
+    default_color = GENERATED_COLORS[default_family]
 
     def replace_tag(match: re.Match[str]) -> str:
         tag_text = match.group(0)
@@ -290,7 +457,9 @@ def replace_dynamic_markers(text: str, path: Path) -> tuple[str, str]:
         if not any(marker in lowered for marker in DYNAMIC_COLOR_MARKERS):
             return tag_text
 
-        color = class_design_color(tag_text) or default_color
+        explicit_family = class_generated_family(tag_text)
+        family = explicit_family or default_family
+        color = GENERATED_COLORS[family]
         result = re.sub(r"currentColor", color, tag_text, flags=re.IGNORECASE)
         result = re.sub(r"context-fill", color, result, flags=re.IGNORECASE)
         result = re.sub(r"context-stroke", color, result, flags=re.IGNORECASE)
@@ -300,7 +469,7 @@ def replace_dynamic_markers(text: str, path: Path) -> tuple[str, str]:
     result = re.sub(r"currentColor", default_color, result, flags=re.IGNORECASE)
     result = re.sub(r"context-fill", default_color, result, flags=re.IGNORECASE)
     result = re.sub(r"context-stroke", default_color, result, flags=re.IGNORECASE)
-    return result, default_color
+    return result, default_color, default_family
 
 
 def _svg_tag(local_name: str) -> str:
@@ -317,7 +486,7 @@ def shadow_highlight_offset(size: int) -> float:
 
 
 def add_design_layer_effect(path: Path, logical_size: int, base_color: str) -> None:
-    """Add Papirus shadow/highlight layers without changing the SVG geometry.
+    """Add Papirus shadow/highlight layers without changing SVG geometry.
 
     The filter is a vector equivalent of the DESIGN.md construction:
     - black 20% copy offset downward;
@@ -404,15 +573,14 @@ def add_design_layer_effect(path: Path, logical_size: int, base_color: str) -> N
         },
     )
 
-    # DESIGN.md says 20%, or 10% for dark icons. Among the example base colors
-    # we use 10% only for the dedicated dark-grey material.
-    highlight_opacity = "0.1" if base_color.lower() == DESIGN_COLORS["dark-grey"] else "0.2"
+    # Generated semantic colors are mid-value colors, so DESIGN.md's normal 20%
+    # highlight applies. Real fixed-color art is never rewritten here.
     ET.SubElement(
         filter_node,
         _svg_tag("feFlood"),
         {
             "flood-color": DESIGN_EFFECT_COLORS["highlight"],
-            "flood-opacity": highlight_opacity,
+            "flood-opacity": "0.2",
             "result": "papirusHighlightColor",
         },
     )
@@ -452,12 +620,15 @@ def add_design_layer_effect(path: Path, logical_size: int, base_color: str) -> N
     tree.write(path, encoding="unicode", xml_declaration=False)
 
 
-def design_fallback_svg(path: Path, logical_size: int) -> None:
-    """Turn one dynamic monochrome SVG into a Papirus DESIGN-style colored icon."""
+def design_fallback_svg(path: Path, logical_size: int) -> str:
+    """Turn one dynamic SVG into a unified Papirus-style generated fallback.
+
+    Returns the semantic family used for audit/reporting.
+    """
     original = path.read_text(encoding="utf-8", errors="strict")
     old_colors = {color.lower() for color in HEX_RE.findall(original)}
 
-    changed, base_color = replace_dynamic_markers(original, path)
+    changed, base_color, family = replace_dynamic_markers(original, path)
     path.write_text(changed, encoding="utf-8")
 
     if uses_dynamic_theme_color(path):
@@ -465,22 +636,24 @@ def design_fallback_svg(path: Path, logical_size: int) -> None:
 
     add_design_layer_effect(path, logical_size, base_color)
 
-    # Safety rail: this fallback may only introduce colors from the checked-in
-    # design example plus the DESIGN.md black/white effect colors.
+    # Safety rail: generated fallbacks may introduce only the four muted semantic
+    # colors derived from examples-papirus.svg plus DESIGN.md effect colors.
     after = path.read_text(encoding="utf-8", errors="strict")
     new_colors = {color.lower() for color in HEX_RE.findall(after)} - old_colors
-    allowed = {value.lower() for value in DESIGN_COLORS.values()}
+    allowed = {value.lower() for value in GENERATED_COLORS.values()}
     allowed.update(value.lower() for value in DESIGN_EFFECT_COLORS.values())
     unexpected = sorted(new_colors - allowed)
     if unexpected:
         raise ValueError(
-            f"Generated colors not permitted by DESIGN.md/examples-papirus.svg in {path}: "
+            f"Generated colors outside the unified fallback palette in {path}: "
             + ", ".join(unexpected)
         )
 
     if "<linearGradient" in after or "<radialGradient" in after:
         if "<linearGradient" not in original and "<radialGradient" not in original:
             raise ValueError(f"Generator introduced a gradient, forbidden by DESIGN.md: {path}")
+
+    return family
 
 
 def rewrite_index_theme(index_path: Path, display_name: str) -> None:
@@ -489,7 +662,7 @@ def rewrite_index_theme(index_path: Path, display_name: str) -> None:
     text = re.sub(r"(?m)^Name=.*$", f"Name={display_name}", text, count=1)
     text = re.sub(
         r"(?m)^Comment=.*$",
-        "Comment=Papirus colorful UI variant following tools/work/DESIGN.md",
+        "Comment=Papirus colorful UI variant with unified muted generated fallbacks",
         text,
         count=1,
     )
@@ -529,6 +702,7 @@ def build_theme(source: Path, destination: Path, display_name: str) -> BuildStat
 
     replacements: list[Replacement] = []
     designed: list[str] = []
+    family_counts: Counter[str] = Counter()
 
     for target in dynamic_files:
         candidates = fixed_color_by_stem.get(normalized_stem(target), [])
@@ -549,7 +723,8 @@ def build_theme(source: Path, destination: Path, display_name: str) -> BuildStat
             continue
 
         logical_size, _scale = size_key(target, destination)
-        design_fallback_svg(target, logical_size)
+        family = design_fallback_svg(target, logical_size)
+        family_counts[family] += 1
         designed.append(str(target.relative_to(destination)))
 
     remaining = [
@@ -567,6 +742,7 @@ def build_theme(source: Path, destination: Path, display_name: str) -> BuildStat
         dynamic_remaining=len(remaining),
         replacements=tuple(replacements),
         designed=tuple(designed),
+        family_counts=tuple(sorted(family_counts.items())),
     )
 
 
@@ -609,8 +785,16 @@ def main() -> int:
     print(f"Symbolic files:            {stats.symbolic_files}")
     print(f"Dynamic SVGs before:       {stats.dynamic_before}")
     print(f"Existing color art reused: {stats.reused_existing_color}")
-    print(f"DESIGN-style fallbacks:    {stats.designed_fallbacks}")
+    print(f"Generated fallbacks:       {stats.designed_fallbacks}")
     print(f"Dynamic SVGs remaining:    {stats.dynamic_remaining}")
+    print(
+        "Generated families:        "
+        + ", ".join(f"{name}={count}" for name, count in stats.family_counts)
+    )
+    print(
+        "Generated palette:         "
+        + ", ".join(f"{name}={color}" for name, color in GENERATED_COLORS.items())
+    )
     print("Design source:             tools/work/DESIGN.md + examples-papirus.svg")
     return 0
 
