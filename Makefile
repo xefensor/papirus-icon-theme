@@ -60,10 +60,15 @@ test: test_short
 test-all: test_short test_long
 
 .PHONY: test_short
-test_short: test_rendering_glitches test_optimization test_svg_elems test_symlinks test_filenames test_decimal_size test_lengths_units
+test_short: test_colorful_generator test_rendering_glitches test_optimization test_svg_elems test_symlinks test_filenames test_decimal_size test_lengths_units
 
 .PHONY: test_long
 test_long: test_xml_struct
+
+.PHONY: test_colorful_generator
+test_colorful_generator:
+	# >>> Testing colorful symbolic theme generator (fixture + real Papirus-Dark)
+	python3 tools/test-colorful-theme.py
 
 .PHONY: test_rendering_glitches
 test_rendering_glitches:
