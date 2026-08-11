@@ -293,8 +293,23 @@ def generated_color_family(path: Path) -> str:
     ):
         return "blue"
 
-    # Constructive actions are green. Keep this before amber so "unlock" does
-    # not accidentally match the "lock" attention token.
+    # Marking/holding actions keep one amber family even when names also contain
+    # generic constructive words such as "new" (e.g. bookmark-new).
+    if _contains_any(
+        name,
+        (
+            "pin",
+            "pinned",
+            "favorite",
+            "favourite",
+            "bookmark",
+            "starred",
+        ),
+    ):
+        return "amber"
+
+    # Constructive actions are green. Keep this before the remaining lock-state
+    # amber tokens so "unlock" does not accidentally match "lock".
     if _contains_any(
         name,
         (
@@ -319,7 +334,7 @@ def generated_color_family(path: Path) -> str:
     ):
         return "green"
 
-    # Sleep/hold/attention/marked states form one amber family.
+    # Sleep/hold/attention states form the rest of the amber family.
     if _contains_any(
         name,
         (
@@ -332,12 +347,6 @@ def generated_color_family(path: Path) -> str:
             "attention",
             "limited",
             "degraded",
-            "pin",
-            "pinned",
-            "favorite",
-            "favourite",
-            "bookmark",
-            "starred",
             "locked",
             "lock",
             "busy",
