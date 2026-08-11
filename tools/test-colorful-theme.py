@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Regression tests for tools/make-colorful-theme.py.
 
-The full Papirus-Dark build is intentional. A tiny fixture alone previously let
-a broken generator report ``Symbolic: 0`` while looking correct in isolation.
-These tests now require the generated real theme to contain zero dynamic theme
-color references.
+The full Papirus and Papirus-Dark builds are intentional. Tiny fixtures alone
+previously let a broken generator report ``Symbolic: 0`` while looking correct
+in isolation. These tests require both generated real themes to contain zero
+dynamic theme color references.
 """
 
 from __future__ import annotations
@@ -114,21 +114,21 @@ class ColorfulThemeTests(unittest.TestCase):
             self.assertIn("#f44336", text)
             self.assertNotIn("currentcolor", text)
 
-    def test_real_papirus_dark_has_zero_dynamic_color_svgs(self) -> None:
-        """Build the real fork and prove no theme-driven monochrome SVG remains."""
-        source = REPO_ROOT / "Papirus-Dark"
+    def assert_real_theme_has_zero_dynamic_colors(self, theme_name: str) -> None:
+        """Build a real repository theme and prove no dynamic SVG color remains."""
+        source = REPO_ROOT / theme_name
         self.assertTrue((source / "index.theme").is_file())
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            destination = Path(temp_dir) / "Papirus-Dark-Colorful"
+            destination = Path(temp_dir) / f"{theme_name}-Colorful"
             stats = generator.build_theme(
                 source,
                 destination,
-                "Papirus-Dark Colorful Test",
+                f"{theme_name} Colorful Test",
             )
 
             print(
-                "REAL Papirus-Dark result: "
+                f"REAL {theme_name} result: "
                 f"symbolic={stats.symbolic_files}, "
                 f"dynamic-before={stats.dynamic_before}, "
                 f"reused-fixed={stats.reused_fixed}, "
@@ -143,7 +143,7 @@ class ColorfulThemeTests(unittest.TestCase):
             self.assertGreater(
                 stats.synthesized,
                 0,
-                "real theme unexpectedly exercised no symbolic-only fallback",
+                f"real {theme_name} unexpectedly exercised no symbolic-only fallback",
             )
             self.assertEqual(stats.dynamic_remaining, 0)
 
@@ -152,12 +152,15 @@ class ColorfulThemeTests(unittest.TestCase):
                 for path in destination.rglob("*.svg")
                 if path.is_file() and generator.uses_dynamic_theme_color(path)
             ]
-            self.assertEqual(remaining, [], "generated theme still contains dynamic-color SVGs")
+            self.assertEqual(
+                remaining,
+                [],
+                f"generated {theme_name} theme still contains dynamic-color SVGs",
+            )
 
-            # Representative Plasma tray/status icons. Audio should normally be
-            # replaced from existing fixed Papirus artwork; battery-level-0 was
-            # previously one of the unmatched symbolic-only names and therefore
-            # exercises the fallback path on the real repository.
+            # Representative Plasma tray/status icons. These cover an icon that
+            # normally reuses fixed artwork and names that previously needed the
+            # synthesized fixed-color fallback.
             audio = destination / "22x22" / "symbolic" / "status" / "audio-volume-high-symbolic.svg"
             battery = destination / "22x22" / "symbolic" / "status" / "battery-level-0-symbolic.svg"
             bluetooth = destination / "22x22" / "symbolic" / "status" / "bluetooth-disconnected-symbolic.svg"
@@ -174,8 +177,16 @@ class ColorfulThemeTests(unittest.TestCase):
             self.assertNotIn("currentcolor", battery_text)
 
             index_text = (destination / "index.theme").read_text(encoding="utf-8")
-            self.assertIn("Name=Papirus-Dark Colorful Test", index_text)
+            self.assertIn(f"Name={theme_name} Colorful Test", index_text)
             self.assertIn("Inherits=hicolor", index_text)
+
+    def test_real_papirus_has_zero_dynamic_color_svgs(self) -> None:
+        """Normal Papirus must be fully fixed-color too, not only Papirus-Dark."""
+        self.assert_real_theme_has_zero_dynamic_colors("Papirus")
+
+    def test_real_papirus_dark_has_zero_dynamic_color_svgs(self) -> None:
+        """Papirus-Dark must remain fully fixed-color."""
+        self.assert_real_theme_has_zero_dynamic_colors("Papirus-Dark")
 
 
 if __name__ == "__main__":
