@@ -41,10 +41,18 @@ def dynamic_svg(body: str, size: int = 22) -> str:
     )
 
 
-def hls_saturation(color: str) -> float:
+def hls_values(color: str) -> tuple[float, float, float]:
     value = color.lstrip("#")
     r, g, b = (int(value[i : i + 2], 16) / 255 for i in (0, 2, 4))
-    return colorsys.rgb_to_hls(r, g, b)[2]
+    return colorsys.rgb_to_hls(r, g, b)
+
+
+def hls_saturation(color: str) -> float:
+    return hls_values(color)[2]
+
+
+def hls_lightness(color: str) -> float:
+    return hls_values(color)[1]
 
 
 class ColorfulThemeTests(unittest.TestCase):
@@ -56,9 +64,13 @@ class ColorfulThemeTests(unittest.TestCase):
         for color in generator.DESIGN_COLORS.values():
             self.assertIn(color, example)
 
-    def test_generated_semantic_palette_has_restored_strength(self) -> None:
+    def test_generated_semantic_palette_matches_papirus_more_closely(self) -> None:
         self.assertEqual(set(generator.GENERATED_COLORS), {"blue", "green", "amber", "red"})
-        self.assertAlmostEqual(generator.GENERATED_SATURATION_CAP, 0.58)
+        self.assertAlmostEqual(generator.GENERATED_SATURATION_CAP, 0.72)
+        self.assertEqual(
+            generator.GENERATED_LIGHTNESS_LIFTS,
+            {"blue": 0.020, "green": 0.000, "amber": 0.015, "red": 0.010},
+        )
 
         source_map = {
             "blue": "blue",
@@ -68,15 +80,32 @@ class ColorfulThemeTests(unittest.TestCase):
         }
         for family, source_name in source_map.items():
             color = generator.GENERATED_COLORS[family]
-            self.assertEqual(color, generator._muted_example_color(generator.DESIGN_COLORS[source_name]))
+            self.assertEqual(
+                color,
+                generator._muted_example_color(
+                    generator.DESIGN_COLORS[source_name],
+                    generator.GENERATED_LIGHTNESS_LIFTS[family],
+                ),
+            )
             self.assertLessEqual(
                 hls_saturation(color),
                 generator.GENERATED_SATURATION_CAP + 0.005,
                 family,
             )
 
-        # The high-saturation anchors are still softened, just less aggressively
-        # than the previous 45% cap.
+        # Regression values for the tuned generated-only palette. These remain
+        # derived from examples-papirus.svg, but are much closer in strength to
+        # real fixed-color Papirus artwork than the previous 58% palette.
+        self.assertEqual(
+            generator.GENERATED_COLORS,
+            {
+                "blue": "#4a91e1",
+                "green": "#4bae4f",
+                "amber": "#dc8225",
+                "red": "#c6362b",
+            },
+        )
+
         self.assertLess(
             hls_saturation(generator.GENERATED_COLORS["blue"]),
             hls_saturation(generator.DESIGN_COLORS["blue"]),
@@ -84,6 +113,14 @@ class ColorfulThemeTests(unittest.TestCase):
         self.assertLess(
             hls_saturation(generator.GENERATED_COLORS["amber"]),
             hls_saturation(generator.DESIGN_COLORS["orange"]),
+        )
+        self.assertGreater(
+            hls_lightness(generator.GENERATED_COLORS["blue"]),
+            hls_lightness(generator._muted_example_color(generator.DESIGN_COLORS["blue"])),
+        )
+        self.assertGreater(
+            hls_lightness(generator.GENERATED_COLORS["amber"]),
+            hls_lightness(generator._muted_example_color(generator.DESIGN_COLORS["orange"])),
         )
 
     def test_variant_neutral_colors_are_theme_appropriate(self) -> None:
