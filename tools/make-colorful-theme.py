@@ -50,6 +50,11 @@ KNOWN_CONTEXTS = {
 
 IMAGE_SUFFIXES = {".svg", ".png", ".xpm"}
 DYNAMIC_COLOR_MARKERS = ("currentcolor", "context-fill", "context-stroke")
+SEMANTIC_FALLBACK_MARKER = "<!-- papirus-colorful-semantic-fallback -->"
+SEMANTIC_FALLBACK_TOKEN = "papirus-colorful-semantic-fallback"
+SEMANTIC_FALLBACK_RE = re.compile(
+    r"<!--\s*papirus-colorful-semantic-fallback(?:\s*:\s*(?P<family>[a-z]+))?\s*-->"
+)
 
 # Exact example colors from tools/work/examples-papirus.svg.
 # DESIGN.md explicitly points to that file as a source of good Papirus colors.
@@ -176,6 +181,43 @@ def uses_dynamic_theme_color(path: Path) -> bool:
     except OSError:
         return True
     return any(marker in lowered for marker in DYNAMIC_COLOR_MARKERS)
+
+
+def is_semantic_fallback(path: Path) -> bool:
+    """Return true for monochrome/recolored art eligible for replacement."""
+    if path.suffix.lower() != ".svg":
+        return False
+    try:
+        lowered = path.read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return True
+    return (
+        any(marker in lowered for marker in DYNAMIC_COLOR_MARKERS)
+        or SEMANTIC_FALLBACK_TOKEN in lowered
+    )
+
+
+def is_marked_semantic_fallback(path: Path) -> bool:
+    if path.suffix.lower() != ".svg":
+        return False
+    try:
+        return SEMANTIC_FALLBACK_TOKEN in path.read_text(
+            encoding="utf-8", errors="ignore"
+        ).lower()
+    except OSError:
+        return False
+
+
+def marked_semantic_family(text: str) -> str | None:
+    match = SEMANTIC_FALLBACK_RE.search(text)
+    if match is None:
+        return None
+    family = match.group("family")
+    if family == "orange":
+        return "amber"
+    if family in {"neutral", "blue", "green", "red"}:
+        return family
+    return None
 
 
 def normalized_stem(path: Path) -> str:
@@ -348,8 +390,13 @@ def _family_color(family: str, theme_name: str) -> str:
     return GENERATED_COLORS[family]
 
 
-def replace_dynamic_markers(text: str, path: Path, theme_name: str) -> tuple[str, str, str]:
-    default_family = generated_color_family(path)
+def replace_dynamic_markers(
+    text: str,
+    path: Path,
+    theme_name: str,
+    default_family_override: str | None = None,
+) -> tuple[str, str, str]:
+    default_family = default_family_override or generated_color_family(path)
     default_color = _family_color(default_family, theme_name)
 
     def replace_tag(match: re.Match[str]) -> str:
@@ -469,7 +516,12 @@ def design_fallback_svg(path: Path, logical_size: int, theme_name: str) -> str:
     """Color one generated-only dynamic SVG and return its semantic family."""
     original = path.read_text(encoding="utf-8", errors="strict")
     old_colors = {color.lower() for color in HEX_RE.findall(original)}
-    changed, base_color, family = replace_dynamic_markers(original, path, theme_name)
+    changed, base_color, family = replace_dynamic_markers(
+        original,
+        path,
+        theme_name,
+        default_family_override=marked_semantic_family(original),
+    )
     path.write_text(changed, encoding="utf-8")
 
     if uses_dynamic_theme_color(path):
@@ -506,7 +558,14 @@ def rewrite_index_theme(index_path: Path, display_name: str) -> None:
     index_path.write_text(text, encoding="utf-8")
 
 
-def build_theme(source: Path, destination: Path, display_name: str) -> BuildStats:
+def build_theme(
+    source: Path,
+    destination: Path,
+    display_name: str,
+    *,
+    generate_fallbacks: bool = True,
+    polish_semantic_fallbacks: bool = False,
+) -> BuildStats:
     if not (source / "index.theme").is_file():
         raise FileNotFoundError(f"Not an icon theme: {source}")
     if source.resolve() == destination.resolve():
@@ -524,17 +583,22 @@ def build_theme(source: Path, destination: Path, display_name: str) -> BuildStat
     ]
     symbolic_files = [path for path in image_files if is_symbolic_path(path, destination)]
     dynamic_files = [path for path in image_files if uses_dynamic_theme_color(path)]
+    dynamic_before = len(dynamic_files)
+    fallback_files = [path for path in image_files if is_semantic_fallback(path)]
 
     fixed_color_by_stem: dict[str, list[Path]] = defaultdict(list)
     for path in image_files:
-        if not uses_dynamic_theme_color(path):
+        if not is_semantic_fallback(path):
             fixed_color_by_stem[normalized_stem(path)].append(path)
 
     replacements: list[Replacement] = []
     designed: list[str] = []
     family_counts: Counter[str] = Counter()
 
-    for target in dynamic_files:
+    # Prefer genuine fixed-color Papirus art for every eligible monochrome or
+    # semantic fallback. This also covers the baked custom color families,
+    # which intentionally no longer contain ``currentColor``.
+    for target in fallback_files:
         candidates = fixed_color_by_stem.get(normalized_stem(target), [])
         if candidates:
             source_icon = max(candidates, key=lambda c: candidate_score(target, c, destination))
@@ -545,12 +609,29 @@ def build_theme(source: Path, destination: Path, display_name: str) -> BuildStat
             target.write_bytes(source_bytes)
             shutil.copystat(source_icon, target)
             replacements.append(Replacement(target=target_rel, source=source_rel))
-            continue
 
-        logical_size, _scale = size_key(target, destination)
-        family = design_fallback_svg(target, logical_size, source.name)
-        family_counts[family] += 1
-        designed.append(str(target.relative_to(destination)))
+    # Artwork made by the semantic recoloring pass gets the same restrained
+    # palette and size-aware shadow/highlight treatment as generated Papirus
+    # fallbacks. A successful genuine-art replacement no longer has the marker
+    # and is therefore left byte-for-byte unchanged.
+    if polish_semantic_fallbacks:
+        for target in fallback_files:
+            if not is_marked_semantic_fallback(target):
+                continue
+            logical_size, _scale = size_key(target, destination)
+            family = design_fallback_svg(target, logical_size, source.name)
+            family_counts[family] += 1
+            designed.append(str(target.relative_to(destination)))
+
+    # Only still-dynamic targets need generated fixed-color artwork. Baked
+    # custom-family icons without a counterpart are already complete.
+    dynamic_files = [path for path in image_files if uses_dynamic_theme_color(path)]
+    if generate_fallbacks:
+        for target in dynamic_files:
+            logical_size, _scale = size_key(target, destination)
+            family = design_fallback_svg(target, logical_size, source.name)
+            family_counts[family] += 1
+            designed.append(str(target.relative_to(destination)))
 
     remaining = [
         path for path in destination.rglob("*.svg")
@@ -560,7 +641,7 @@ def build_theme(source: Path, destination: Path, display_name: str) -> BuildStat
     return BuildStats(
         theme=source.name,
         symbolic_files=len(symbolic_files),
-        dynamic_before=len(dynamic_files),
+        dynamic_before=dynamic_before,
         reused_existing_color=len(replacements),
         designed_fallbacks=len(designed),
         dynamic_remaining=len(remaining),
@@ -581,6 +662,16 @@ def main() -> int:
     )
     parser.add_argument("--name", help="generated directory name")
     parser.add_argument("--display-name", help="name shown by desktop settings")
+    parser.add_argument(
+        "--keep-semantic-fallbacks",
+        action="store_true",
+        help="reuse existing color art but keep unmatched theme-aware SVGs unchanged",
+    )
+    parser.add_argument(
+        "--polish-semantic-fallbacks",
+        action="store_true",
+        help="give unmatched marked fallbacks the Papirus palette and layer effects",
+    )
     args = parser.parse_args()
 
     source = Path(args.source).expanduser().resolve()
@@ -590,7 +681,13 @@ def main() -> int:
     destination = output_root / theme_name
 
     try:
-        stats = build_theme(source, destination, display_name)
+        stats = build_theme(
+            source,
+            destination,
+            display_name,
+            generate_fallbacks=not args.keep_semantic_fallbacks,
+            polish_semantic_fallbacks=args.polish_semantic_fallbacks,
+        )
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
