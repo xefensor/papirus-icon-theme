@@ -205,6 +205,122 @@ class ColorfulThemeTests(unittest.TestCase):
         self.assertIn("#5d5d5d", light.lower())
         self.assertNotEqual(dark, light)
 
+    def test_marked_baked_fallback_reuses_existing_color_art(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "Papirus"
+            actions = source / "22x22/actions"
+            apps = source / "22x22/apps"
+            actions.mkdir(parents=True)
+            apps.mkdir(parents=True)
+            (source / "index.theme").write_text(
+                "[Icon Theme]\nName=Papirus\nComment=fixture\nInherits=hicolor\n",
+                encoding="utf-8",
+            )
+            (actions / "system-shutdown.svg").write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22">'
+                f'{generator.SEMANTIC_FALLBACK_MARKER}'
+                '<path fill="#e91e63" d="M1 1h20v20H1z"/></svg>\n',
+                encoding="utf-8",
+            )
+            fixed_bytes = (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22">'
+                '<path fill="#123456" d="M2 2h18v18H2z"/></svg>\n'
+            ).encode()
+            (apps / "system-shutdown.svg").write_bytes(fixed_bytes)
+
+            destination = Path(temp_dir) / "out/Papirus-Colorful"
+            stats = generator.build_theme(
+                source,
+                destination,
+                "Papirus Colorful",
+                polish_semantic_fallbacks=True,
+            )
+            target = destination / "22x22/actions/system-shutdown.svg"
+            self.assertEqual(target.read_bytes(), fixed_bytes)
+            self.assertEqual(stats.reused_existing_color, 1)
+            self.assertEqual(stats.dynamic_remaining, 0)
+
+    def test_replacement_only_mode_keeps_unmatched_semantic_art(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "Papirus"
+            actions = source / "22x22/actions"
+            actions.mkdir(parents=True)
+            (source / "index.theme").write_text(
+                "[Icon Theme]\nName=Papirus\nComment=fixture\nInherits=hicolor\n",
+                encoding="utf-8",
+            )
+            source_svg = dynamic_svg(
+                '<path class="ColorScheme-PositiveText" '
+                'style="fill:currentColor" d="M1 1h20v20H1z"/>'
+            )
+            (actions / "unique-action.svg").write_text(source_svg, encoding="utf-8")
+
+            destination = Path(temp_dir) / "out/Papirus-Colorful"
+            stats = generator.build_theme(
+                source,
+                destination,
+                "Papirus Colorful",
+                generate_fallbacks=False,
+            )
+            target = destination / "22x22/actions/unique-action.svg"
+            self.assertEqual(target.read_text(encoding="utf-8"), source_svg)
+            self.assertEqual(stats.reused_existing_color, 0)
+            self.assertEqual(stats.designed_fallbacks, 0)
+            self.assertEqual(stats.dynamic_remaining, 1)
+
+    def test_polish_mode_layers_only_unmatched_marked_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "Papirus"
+            actions = source / "22x22/actions"
+            actions.mkdir(parents=True)
+            (source / "index.theme").write_text(
+                "[Icon Theme]\nName=Papirus\nComment=fixture\nInherits=hicolor\n",
+                encoding="utf-8",
+            )
+            (actions / "view-conversation-balloon.svg").write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22">'
+                f'{generator.SEMANTIC_FALLBACK_MARKER}'
+                '<path fill="#00bcd4" d="M2 2h18v18H2z"/></svg>\n',
+                encoding="utf-8",
+            )
+
+            destination = Path(temp_dir) / "out/Papirus-Colorful"
+            stats = generator.build_theme(
+                source,
+                destination,
+                "Papirus Colorful",
+                generate_fallbacks=False,
+                polish_semantic_fallbacks=True,
+            )
+            text = (destination / "22x22/actions/view-conversation-balloon.svg").read_text(
+                encoding="utf-8"
+            ).lower()
+            self.assertIn("#00bcd4", text)
+            self.assertIn("papirus-colorful-layering", text)
+            self.assertIn('flood-opacity="0.2"', text)
+            self.assertEqual(stats.reused_existing_color, 0)
+            self.assertEqual(stats.designed_fallbacks, 1)
+
+    def test_audited_neutral_marker_overrides_filename_heuristic(self) -> None:
+        source = dynamic_svg(
+            '<path class="ColorScheme-Text" style="fill:currentColor" '
+            'd="M1 1h20v20H1z"/>'
+        ).replace(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22">',
+            '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22">'
+            '<!-- papirus-colorful-semantic-fallback:neutral -->',
+        )
+        changed, color, family = generator.replace_dynamic_markers(
+            source,
+            Path("/tmp/Papirus/22x22/actions/input-keyboard.svg"),
+            "Papirus-Dark",
+            default_family_override=generator.marked_semantic_family(source),
+        )
+        self.assertEqual(family, "neutral")
+        self.assertEqual(color, "#cccccc")
+        self.assertIn("#cccccc", changed)
+        self.assertNotIn(generator.GENERATED_COLORS["blue"], changed)
+
     def test_relative_papirus_symlinks_are_followed_and_fixed_art_wins(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "repo"

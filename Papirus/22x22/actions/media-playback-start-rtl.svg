@@ -1,10 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" version="1.1">
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" version="1.1"><!-- papirus-colorful-semantic-fallback:green -->
  <defs>
   <style id="current-color-scheme" type="text/css">
    .ColorScheme-Text { color:#444444; } .ColorScheme-Highlight { color:#4285f4; } .ColorScheme-NeutralText { color:#ff9800; } .ColorScheme-PositiveText { color:#4caf50; } .ColorScheme-NegativeText { color:#f44336; }
-  </style>
+</style>
  </defs>
  <g transform="translate(3,3)">
-  <path style="fill:currentColor" class="ColorScheme-Text" d="M 13,2 2,8 13,14 Z"/>
+  <path style="fill:currentColor" d="M 13,2 2,8 13,14 Z" class="ColorScheme-PositiveText"/>
  </g>
 </svg>
