@@ -36,30 +36,37 @@ Install all three resulting variants for the current user:
 ./tools/install-colorful-kde-themes.sh
 ```
 
-The semantic palette is green `#4caf50`, red `#f44336`, orange `#ff9800`, blue
-`#4285f4`, cyan `#00bcd4`, purple `#9c27b0`, pink `#e91e63`, and yellow
-`#f9a825` on light/regular variants or `#fecd38` on Papirus-Dark. Ambiguous
+The shared light and dark Xef/Papirus palettes live in `xef_palette.py`.
+Papirus and Papirus-Light use darker semantic colors with at least roughly 3:1
+contrast against the standard `#e4e4e4` surface. Papirus-Dark keeps the vivid
+reference colors: cyan `#00bcd4`, purple `#673ab7`, orange `#ff9800`, red
+`#f44336`, and green `#4caf50`. Ambiguous
 layout, selection, transformation, settings, and application-indicator glyphs
-remain theme-aware neutral grey. Blue, green, orange, and red use KDE's native
-semantic classes. The additional cyan, purple, pink, and yellow families use
-fixed fills because Plasma discards unknown color-scheme classes.
+remain monochrome with KDE's `ColorScheme-Text`, so their brightness follows
+the active text color like Breeze instead of using a generated light or dark
+grey. Blue, green, orange, and red use KDE's native semantic classes. The
+additional cyan, purple, pink, and yellow families use fixed fills because
+Plasma discards unknown color-scheme classes.
 
-Recolored SVGs carry a non-rendering fallback marker. During installation,
+Semantically colored SVGs carry a non-rendering fallback marker; neutral
+monochrome SVGs deliberately do not. During installation,
 `make-colorful-theme.py` uses it (alongside KDE's dynamic color markers) to
 prefer genuine fixed-color Papirus artwork with the same icon name. Semantic
 recoloring remains only where no full-color counterpart exists.
 
-Those unmatched fallbacks then use the restrained Papirus-derived palette.
+Those unmatched fallbacks then use the surface-appropriate palette. Generated
+blue is `#1976d2` on light surfaces and `#4a91e1` on dark surfaces.
 At 22 px and above the installer adds the design guide's subtle black lower
 shadow and white upper highlight; 16 px icons remain flat for pixel clarity.
 Original full-color artwork is copied unchanged and never receives this effect.
 
-The semantic audit follows a conservative rule: color communicates an object
-identity, a meaningful state, urgency, or a constructive/destructive action.
-Generic navigation, formatting, keyboard, layout, layer/node/path, media-mode,
-clock/history, and application-indicator controls remain neutral. Generated SVG
-markers record their assigned family so later audits can safely recolor an icon
-or return it to neutral without confusing it with original Papirus artwork.
+The semantic audit follows a conservative rule: color communicates only a
+meaningful state, urgency, or an unambiguous constructive/destructive action.
+Object and content identities—including music, audio, artist, album, genre,
+radio, folder, device, and network categories—remain monochrome alongside
+generic navigation, formatting, layout, and application-indicator controls.
+Generated SVG markers record assigned families so later audits can safely
+recolor an icon or return it to neutral.
 
 
 ## Useful snippets

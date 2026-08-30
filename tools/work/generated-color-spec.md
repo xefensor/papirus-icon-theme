@@ -4,25 +4,46 @@ This file defines the semantic color system used **only** for icons that have no
 
 Existing fixed-color artwork always wins unchanged. This includes variant-specific artwork in Papirus, Papirus-Dark, and Papirus-Light.
 
+The exact variant values are defined once in `tools/xef_palette.py`. KDE SVG
+classes keep `currentColor` and therefore remain theme-dynamic; their embedded
+stylesheet defaults use the matching light or dark palette.
+
+```text
+role/family  Papirus + Papirus-Light  Papirus-Dark
+blue         #1976d2                  #4a91e1
+green        #388e3c                  #4caf50
+amber        #e45100                  #ff9800
+red          #d32f2f                  #f44336
+cyan         #00838f                  #00bcd4
+purple       #673ab7                  #673ab7
+pink         #d81b60                  #f9548f
+yellow       #a87900                  #fecd38
+```
+
 ## Goals
 
 Generated fallbacks should be close in visual strength to surrounding Papirus artwork, consistent across related functions, and visibly part of the Papirus family. They must follow `tools/work/DESIGN.md`: warm/non-toxic colors, no gradients, Papirus shadow/highlight treatment, and size-specific handling.
 
 ## Generated semantic palette
 
-Generated semantic colors are derived from the Papirus example palette in `tools/work/examples-papirus.svg`. The example hue is preserved, HLS saturation is capped at **72%**, and only tiny family-specific lightness lifts are applied to the generated-only blue, amber, and red. This keeps the generated UI glyphs close to real Papirus color strength without copying the most extreme saturation of the full artwork.
+Papirus-Dark uses the vivid reference palette. Papirus and Papirus-Light use
+darker counterparts so small colored monochrome glyphs remain readable against
+the standard light `#e4e4e4` surface.
 
 ```text
-blue  #4a91e1  (+0.020 lightness)
-green #4bae4f  (unchanged)
-amber #dc8225  (+0.015 lightness)
-red   #c6362b  (+0.010 lightness)
+blue  #1976d2
+green #388e3c
+amber #e45100
+red   #d32f2f
 ```
 
-- **Blue** — explicitly neutral/system/device information: edit/configure/settings, audio, display, network, Bluetooth, restart/session, navigation.
+Fixed additional light-theme families use purple `#673ab7`, pink `#d81b60`,
+yellow `#a87900`, and cyan `#00838f`.
+
+- **Blue** — explicit informational, refresh, download/upload, import/export, and restore actions.
 - **Green** — add/create/apply/save/install/enable/connect/start/resume/success.
-- **Amber** — suspend/hibernate/sleep/pause, pin/favorite/bookmark/lock, warning/attention/limited states.
-- **Red** — remove/delete/uninstall/disable/disconnect/shutdown/cancel/close/error/failure/critical/muted.
+- **Amber** — restart/reboot/pause, pin/favorite/bookmark/lock, warning/attention/limited states.
+- **Red** — remove/delete/uninstall/shutdown/cancel/close/error/failure/critical.
 
 Blue is **not** the generic fallback. Icons with no clear semantic reason to be colored use a theme-aware neutral instead.
 
@@ -36,34 +57,41 @@ Papirus-Light #5d5d5d  dark neutral on light UI
 Papirus       #5d5d5d  dark neutral default
 ```
 
-This keeps generic actions from looking artificially active merely because the generator could not classify them.
+This keeps object/category identities and generic actions from looking
+artificially active merely because the generator could not classify them.
 
 ## Category and state rules
 
 ### Power/session
-- sleep + hibernate -> amber
-- restart/reboot -> blue
+- sleep/suspend -> cyan
+- hibernate -> purple
+- restart/reboot -> amber
 - shutdown/power off -> red
-- session/switch user -> blue
+- switch user -> green
+- generic session identity -> monochrome
 - log out -> red
 
 ### Common actions
 - add/new/create/apply/save/install/enable/unlock -> green
-- edit/configure/settings/properties/info -> blue
+- info/help/refresh/download/upload/import/export/restore -> blue
 - pin/favorite/bookmark/lock -> amber
-- remove/delete/uninstall/disable/cancel/close -> red
+- remove/delete/uninstall/cancel/close -> red
+- disabled/muted/inactive -> monochrome
 - ambiguous generic action -> theme-aware neutral
 
 ### Audio
-- normal device/output/input/volume identity -> blue
-- muted/disabled/broken/disconnected -> red
+- normal device/output/input/volume identity -> monochrome
+- muted/disabled -> monochrome
+- broken -> red; disconnected -> amber
 - warnings -> amber
 
 ### Network/Bluetooth
-- normal identity -> blue
+- normal identity -> monochrome
 - explicit connect/enable action -> green
 - limited/warning -> amber
-- disconnected/disabled/error -> red
+- disconnected -> amber
+- disabled -> monochrome
+- error -> red
 
 ### Battery
 - charging and levels above 40% -> green

@@ -32,10 +32,10 @@ add_css_classes() {
 		-e '/:currentColor/! s/[ ]class="ColorScheme-[^"]+"//g' \
 		-e '/[^-]color:[^;"]/ s/[ ]class="ColorScheme-[^"]+"//g' \
 		-e '/([^-]color|fill|stop-color|stroke):(#444444|#dfdfdf)/I s/(style="[^"]+")/\1 class="ColorScheme-Text"/' \
-		-e '/([^-]color|fill|stop-color|stroke):#4285f4/I s/(style="[^"]+")/\1 class="ColorScheme-Highlight"/' \
-		-e '/([^-]color|fill|stop-color|stroke):#4caf50/I s/(style="[^"]+")/\1 class="ColorScheme-PositiveText success"/' \
-		-e '/([^-]color|fill|stop-color|stroke):#ff9800/I s/(style="[^"]+")/\1 class="ColorScheme-NeutralText warning"/' \
-		-e '/([^-]color|fill|stop-color|stroke):#f44336/I s/(style="[^"]+")/\1 class="ColorScheme-NegativeText error"/' \
+		-e '/([^-]color|fill|stop-color|stroke):(#127bdc|#1565c0)/I s/(style="[^"]+")/\1 class="ColorScheme-Highlight"/' \
+		-e '/([^-]color|fill|stop-color|stroke):(#4caf50|#388e3c)/I s/(style="[^"]+")/\1 class="ColorScheme-PositiveText success"/' \
+		-e '/([^-]color|fill|stop-color|stroke):(#ff9800|#e45100)/I s/(style="[^"]+")/\1 class="ColorScheme-NeutralText warning"/' \
+		-e '/([^-]color|fill|stop-color|stroke):(#f44336|#d32f2f)/I s/(style="[^"]+")/\1 class="ColorScheme-NegativeText error"/' \
 		"$@"
 }
 

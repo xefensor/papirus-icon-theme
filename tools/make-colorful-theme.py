@@ -30,6 +30,11 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from xef_palette import XEF_COLORS, XEF_LIGHT_COLORS
+except ModuleNotFoundError:  # Support importing as tools.make_colorful_theme.
+    from tools.xef_palette import XEF_COLORS, XEF_LIGHT_COLORS
+
 
 SVG_NS = "http://www.w3.org/2000/svg"
 ET.register_namespace("", SVG_NS)
@@ -68,7 +73,10 @@ DESIGN_COLORS = {
     "light-grey": "#cccccc",
     "dark-grey": "#5d5d5d",
 }
-DESIGN_EFFECT_COLORS = {"shadow": "#000000", "highlight": "#ffffff"}
+DESIGN_EFFECT_COLORS = {
+    "shadow": XEF_COLORS["shadow"],
+    "highlight": XEF_COLORS["highlight"],
+}
 
 # Generated semantic colors should sit close to full Papirus artwork instead of
 # looking dusty or washed out. Keep the original Papirus hue, cap only the most
@@ -99,37 +107,51 @@ def _muted_example_color(color: str, lightness_lift: float = 0.0) -> str:
 # Only generated fallbacks use this palette. Existing fixed-color Papirus art is
 # copied byte-for-byte and can use the complete upstream palette.
 GENERATED_COLORS = {
-    "blue": _muted_example_color(
-        DESIGN_COLORS["blue"], GENERATED_LIGHTNESS_LIFTS["blue"]
-    ),
-    "green": _muted_example_color(
-        DESIGN_COLORS["green"], GENERATED_LIGHTNESS_LIFTS["green"]
-    ),
-    "amber": _muted_example_color(
-        DESIGN_COLORS["orange"], GENERATED_LIGHTNESS_LIFTS["amber"]
-    ),
-    "red": _muted_example_color(
-        DESIGN_COLORS["red"], GENERATED_LIGHTNESS_LIFTS["red"]
-    ),
+    "blue": XEF_COLORS["generated_blue"],
+    "green": XEF_COLORS["success"],
+    "amber": XEF_COLORS["warning"],
+    "red": XEF_COLORS["error"],
+}
+
+# These families are already baked by recolor-kde-monochrome.py because Plasma
+# does not recognize their custom ColorScheme classes. Keeping them here lets
+# the polishing pass preserve their semantic family and validate their palette.
+ADDITIONAL_COLORS = {
+    family: XEF_COLORS[family]
+    for family in ("yellow", "cyan", "purple", "pink")
+}
+
+LIGHT_GENERATED_COLORS = {
+    "blue": XEF_LIGHT_COLORS["generated_blue"],
+    "green": XEF_LIGHT_COLORS["success"],
+    "amber": XEF_LIGHT_COLORS["warning"],
+    "red": XEF_LIGHT_COLORS["error"],
+}
+
+LIGHT_ADDITIONAL_COLORS = {
+    family: XEF_LIGHT_COLORS[family]
+    for family in ("yellow", "cyan", "purple", "pink")
 }
 
 # Unknown/ambiguous generated icons should stay visually neutral. Use a light
 # neutral on the dark-specific variant and a dark neutral on light/regular.
 # Both colors are taken directly from examples-papirus.svg.
 VARIANT_NEUTRAL_COLORS = {
-    "Papirus-Dark": DESIGN_COLORS["light-grey"],
-    "Papirus-Light": DESIGN_COLORS["dark-grey"],
-    "Papirus": DESIGN_COLORS["dark-grey"],
+    "Papirus-Dark": XEF_COLORS["dark_theme_neutral"],
+    "Papirus-Light": XEF_COLORS["light_theme_neutral"],
+    "Papirus": XEF_COLORS["light_theme_neutral"],
 }
 
 
 def generated_neutral_color(theme_name: str) -> str:
-    return VARIANT_NEUTRAL_COLORS.get(theme_name, DESIGN_COLORS["dark-grey"])
+    return VARIANT_NEUTRAL_COLORS.get(
+        theme_name, XEF_COLORS["light_theme_neutral"]
+    )
 
 
 # Hard brightness-limit examples stated in DESIGN.md.
-DESIGN_BRIGHT_LIMIT = "#e4e4e4"
-DESIGN_DARK_LIMIT = "#4f4f4f"
+DESIGN_BRIGHT_LIMIT = XEF_COLORS["light_limit"]
+DESIGN_DARK_LIMIT = XEF_COLORS["dark_limit"]
 
 START_TAG_RE = re.compile(
     r"<(?![!?/])(?P<tag>[A-Za-z_][\w:.-]*)(?P<attrs>[^<>]*)>",
@@ -215,7 +237,16 @@ def marked_semantic_family(text: str) -> str | None:
     family = match.group("family")
     if family == "orange":
         return "amber"
-    if family in {"neutral", "blue", "green", "red"}:
+    if family in {
+        "neutral",
+        "blue",
+        "green",
+        "red",
+        "yellow",
+        "cyan",
+        "purple",
+        "pink",
+    }:
         return family
     return None
 
@@ -276,9 +307,9 @@ def _contains_any(name: str, tokens: tuple[str, ...]) -> bool:
 def generated_color_family(path: Path) -> str:
     """Classify only generated fallbacks into a semantic color family.
 
-    The order matters: destructive states override category identity; restart is
-    checked before "start"; bookmark/pin are checked before "new"; and unlock is
-    checked before lock. Anything with no clear semantic meaning is neutral.
+    The order matters: destructive states override other words, restart is
+    checked before "start", and unlock is checked before lock. Categories and
+    identities are deliberately neutral; only clear actions/states get color.
     """
     name = normalized_stem(path)
 
@@ -297,22 +328,43 @@ def generated_color_family(path: Path) -> str:
                 return "amber"
             return "green"
 
+    # Browsing a media category is not a playback action or active status.
+    if name.startswith("view-media-") or _contains_any(
+        name,
+        (
+            "media-album-track", "media-playlist-normal", "media-playlist-play",
+            "tools-rip-audio-cd", "icon_radio", "im-user", "folder-music",
+        ),
+    ):
+        return "neutral"
+
     # Destructive / failure state.
     if _contains_any(
         name,
         (
             "delete", "remove", "trash", "uninstall", "shutdown", "power-off",
-            "poweroff", "disconnect", "disconnected", "disable", "disabled",
-            "offline", "muted", "mute", "cancel", "close", "stop", "log-out",
+            "poweroff", "cancel", "close", "stop", "log-out",
             "logout", "reject", "forbid", "denied", "error", "failed",
             "failure", "broken", "critical", "erase",
         ),
     ):
         return "red"
 
-    # Neutral system actions that genuinely benefit from blue identity.
-    if _contains_any(name, ("reboot", "restart", "session", "switch-user", "user-switch")):
-        return "blue"
+    if _contains_any(name, ("disconnect", "disconnected", "offline")):
+        return "amber"
+
+    if _contains_any(name, ("disable", "disabled", "muted", "mute", "inactive")):
+        return "neutral"
+
+    # Power/session colors follow the desktop session-menu palette.
+    if _contains_any(name, ("hibernate",)):
+        return "purple"
+    if _contains_any(name, ("suspend", "sleep")):
+        return "cyan"
+    if _contains_any(name, ("reboot", "restart")):
+        return "amber"
+    if _contains_any(name, ("switch-user", "user-switch", "session-switch")):
+        return "green"
 
     # Mark/hold/favorite family before generic constructive tokens such as new.
     if _contains_any(name, ("pin", "pinned", "favorite", "favourite", "bookmark", "starred")):
@@ -333,7 +385,7 @@ def generated_color_family(path: Path) -> str:
     if _contains_any(
         name,
         (
-            "suspend", "hibernate", "sleep", "pause", "warning", "caution",
+            "pause", "warning", "caution",
             "attention", "limited", "degraded", "locked", "lock", "busy",
         ),
     ):
@@ -344,16 +396,13 @@ def generated_color_family(path: Path) -> str:
     if name.startswith(("network-connect", "bluetooth-connect", "device-connect")):
         return "green"
 
-    # Blue is reserved for actual neutral system/device/information identity, not
-    # used as the generic fallback anymore.
+    # Blue is reserved for explicit informational/refresh actions, not object
+    # identities such as audio, display, network, device, artist, or folder.
     if _contains_any(
         name,
         (
-            "edit", "configure", "configuration", "settings", "preferences",
-            "properties", "info", "information", "tools", "speaker", "audio",
-            "volume", "microphone", "headphone", "display", "monitor", "screen",
-            "network", "wireless", "wifi", "ethernet", "bluetooth", "vpn",
-            "device", "sync", "refresh", "reload", "navigate", "go-",
+            "info", "information", "help", "download", "upload", "import",
+            "export", "sync", "refresh", "reload", "restore", "update",
         ),
     ):
         return "blue"
@@ -387,7 +436,28 @@ def class_generated_family(tag_text: str) -> str | None:
 def _family_color(family: str, theme_name: str) -> str:
     if family == "neutral":
         return generated_neutral_color(theme_name)
-    return GENERATED_COLORS[family]
+    light_surface = theme_name != "Papirus-Dark"
+    additional = LIGHT_ADDITIONAL_COLORS if light_surface else ADDITIONAL_COLORS
+    generated = LIGHT_GENERATED_COLORS if light_surface else GENERATED_COLORS
+    if family in additional:
+        return additional[family]
+    return generated[family]
+
+
+def normalize_marked_fixed_color(text: str, family: str, theme_name: str) -> str:
+    """Move a baked custom family between its light and dark palette values."""
+    if family not in ADDITIONAL_COLORS:
+        return text
+    target = _family_color(family, theme_name)
+    changed = text
+    for candidate in {
+        ADDITIONAL_COLORS[family],
+        LIGHT_ADDITIONAL_COLORS[family],
+    }:
+        changed = re.sub(
+            re.escape(candidate), target, changed, flags=re.IGNORECASE
+        )
+    return changed
 
 
 def replace_dynamic_markers(
@@ -482,7 +552,9 @@ def add_design_layer_effect(path: Path, logical_size: int, base_color: str) -> N
 
     # DESIGN.md specifies 10% highlight for dark elements. Neutral light-theme
     # fallback uses the dark-grey material, so honor that here too.
-    highlight_opacity = "0.1" if base_color.lower() == DESIGN_COLORS["dark-grey"] else "0.2"
+    highlight_opacity = (
+        "0.1" if base_color.lower() == XEF_COLORS["light_theme_neutral"] else "0.2"
+    )
     ET.SubElement(filter_node, _svg_tag("feFlood"), {
         "flood-color": DESIGN_EFFECT_COLORS["highlight"],
         "flood-opacity": highlight_opacity,
@@ -515,12 +587,14 @@ def add_design_layer_effect(path: Path, logical_size: int, base_color: str) -> N
 def design_fallback_svg(path: Path, logical_size: int, theme_name: str) -> str:
     """Color one generated-only dynamic SVG and return its semantic family."""
     original = path.read_text(encoding="utf-8", errors="strict")
+    marked_family = marked_semantic_family(original)
+    original = normalize_marked_fixed_color(original, marked_family or "", theme_name)
     old_colors = {color.lower() for color in HEX_RE.findall(original)}
     changed, base_color, family = replace_dynamic_markers(
         original,
         path,
         theme_name,
-        default_family_override=marked_semantic_family(original),
+        default_family_override=marked_family,
     )
     path.write_text(changed, encoding="utf-8")
 
@@ -532,6 +606,9 @@ def design_fallback_svg(path: Path, logical_size: int, theme_name: str) -> str:
     after = path.read_text(encoding="utf-8", errors="strict")
     new_colors = {color.lower() for color in HEX_RE.findall(after)} - old_colors
     allowed = {value.lower() for value in GENERATED_COLORS.values()}
+    allowed.update(value.lower() for value in ADDITIONAL_COLORS.values())
+    allowed.update(value.lower() for value in LIGHT_GENERATED_COLORS.values())
+    allowed.update(value.lower() for value in LIGHT_ADDITIONAL_COLORS.values())
     allowed.update(value.lower() for value in VARIANT_NEUTRAL_COLORS.values())
     allowed.update(value.lower() for value in DESIGN_EFFECT_COLORS.values())
     unexpected = sorted(new_colors - allowed)

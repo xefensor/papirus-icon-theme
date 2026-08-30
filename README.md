@@ -187,6 +187,12 @@ Support for monochrome icons for KDE colorscheme is now available:
 - Papirus Dark - for dark plasma theme & color scheme (all icons are light)
 - Papirus Light - for light plasma theme & color scheme (all icons are dark)
 
+Most symbolic icons remain monochrome and follow the active KDE text color.
+Only icons with a clear action or status meaning use semantic color—for
+example, play/start is green, pause/warning is orange, and delete/stop/error is
+red. This keeps ordinary navigation, layout, selection, and application
+indicator icons visually neutral.
+
 ![kde-color-scheme](https://i.imgur.com/oM1qhQH.png)
 
 ## Folder color

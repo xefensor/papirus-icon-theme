@@ -2,8 +2,9 @@
 """Apply the Papirus semantic palette to KDE monochrome icon sources.
 
 The pass is intentionally conservative: an icon receives color only when its
-name communicates a stable action, state, or object identity. Generic layout,
-selection, transform, and settings glyphs remain theme-aware neutral grey.
+name communicates an unambiguous action or state. Object/category identities
+and generic layout, navigation, selection, transform, and settings glyphs
+remain theme-aware monochrome.
 
 Supported KDE monochrome roots follow tools/work/DESIGN.md:
 
@@ -22,6 +23,11 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    from xef_palette import XEF_COLORS, XEF_LIGHT_COLORS
+except ModuleNotFoundError:  # Support importing as tools.recolor_kde_monochrome.
+    from tools.xef_palette import XEF_COLORS, XEF_LIGHT_COLORS
 
 
 SUPPORTED_ROOTS = (
@@ -50,17 +56,42 @@ FAMILY_CLASS = {
 
 CUSTOM_COLORS = {
     "Papirus": {
-        "ColorScheme-YellowText": "#f9a825",
-        "ColorScheme-CyanText": "#00bcd4",
-        "ColorScheme-PurpleText": "#9c27b0",
-        "ColorScheme-PinkText": "#e91e63",
+        "ColorScheme-YellowText": XEF_LIGHT_COLORS["yellow"],
+        "ColorScheme-CyanText": XEF_LIGHT_COLORS["cyan"],
+        "ColorScheme-PurpleText": XEF_LIGHT_COLORS["purple"],
+        "ColorScheme-PinkText": XEF_LIGHT_COLORS["pink"],
     },
     "Papirus-Dark": {
-        "ColorScheme-YellowText": "#fecd38",
-        "ColorScheme-CyanText": "#00bcd4",
-        "ColorScheme-PurpleText": "#9c27b0",
-        "ColorScheme-PinkText": "#e91e63",
+        "ColorScheme-YellowText": XEF_COLORS["yellow"],
+        "ColorScheme-CyanText": XEF_COLORS["cyan"],
+        "ColorScheme-PurpleText": XEF_COLORS["purple"],
+        "ColorScheme-PinkText": XEF_COLORS["pink"],
     },
+}
+
+STANDARD_KDE_COLORS = {
+    "Papirus": {
+        "ColorScheme-Highlight": XEF_LIGHT_COLORS["accent"],
+        "ColorScheme-PositiveText": XEF_LIGHT_COLORS["success"],
+        "ColorScheme-NeutralText": XEF_LIGHT_COLORS["warning"],
+        "ColorScheme-NegativeText": XEF_LIGHT_COLORS["error"],
+    },
+    "Papirus-Dark": {
+        "ColorScheme-Highlight": XEF_COLORS["accent"],
+        "ColorScheme-PositiveText": XEF_COLORS["success"],
+        "ColorScheme-NeutralText": XEF_COLORS["warning"],
+        "ColorScheme-NegativeText": XEF_COLORS["error"],
+    },
+}
+
+# Values emitted by earlier versions. Marked custom-family SVGs may already
+# contain these fixed fills, so reset_previous_fallback() recognizes them and
+# can safely rebake the icon with the shared Xef/Papirus palette.
+LEGACY_CUSTOM_COLORS = {
+    "ColorScheme-YellowText": ("#f9a825", "#fecd38"),
+    "ColorScheme-CyanText": ("#00bcd4",),
+    "ColorScheme-PurpleText": ("#9c27b0", "#7767c0"),
+    "ColorScheme-PinkText": ("#e91e63", "#f9548f"),
 }
 
 FULL_OPACITY_ICONS = {"network-disconnect"}
@@ -126,7 +157,7 @@ EXACT_FAMILIES = {
     "image-filter": "purple",
     "insert-emoticon": "pink",
     "insert-link": "cyan",
-    "kdenlive-show-audio": "pink",
+    "kdenlive-show-audio": "neutral",
     "link": "cyan",
     "list-add": "green",
     "list-remove": "red",
@@ -162,8 +193,9 @@ EXACT_FAMILIES = {
     "system-shutdown": "red",
     "system-reboot": "orange",
     "system-restart": "orange",
-    "system-suspend": "orange",
-    "system-suspend-hibernate": "orange",
+    "system-suspend": "cyan",
+    "system-suspend-hibernate": "purple",
+    "system-switch-user": "green",
     "view-conversation-balloon": "cyan",
     "view-filter": "purple",
     "view-refresh": "blue",
@@ -245,6 +277,18 @@ def decide_family(path: Path, context: str | None = None) -> Decision:
 
     if name in {"rating-unrated", "non-starred", "star-off", "no-rating"}:
         return Decision("neutral", "unselected-rating")
+
+    # Media-library entries are navigation categories, not playback states.
+    # Keep this before generic words such as favorite, playing, audio, or media.
+    if name.startswith("view-media-") or name in {
+        "icon_radio",
+        "im-user",
+        "media-album-track",
+        "media-playlist-normal",
+        "media-playlist-play",
+        "tools-rip-audio-cd",
+    }:
+        return Decision("neutral", "media-library-navigation")
 
     if "battery" in name or name.startswith("power-level"):
         term = contains(name, ("charging", "charged", "full", "good"))
@@ -337,9 +381,6 @@ def decide_family(path: Path, context: str | None = None) -> Decision:
     ):
         return Decision("neutral", "media-mode-control")
 
-    if contains(name, ("display", "videocard")):
-        return Decision("blue", "display-hardware")
-
     if contains_token(name, ("reboot", "restart")):
         return Decision("orange", "system-restart")
     if contains_token(name, ("restore",)):
@@ -411,34 +452,13 @@ def decide_family(path: Path, context: str | None = None) -> Decision:
     if term:
         return Decision("neutral", f"structural-{term}")
 
-    term = contains(name, ("expense", "liability", "loan", "debt"))
-    if term:
-        return Decision("red", f"finance-{term}")
+    # Emotion/reaction actions can carry the pink family. Media, audio, video,
+    # artist, album, genre, radio, and similar content identities deliberately
+    # fall through to monochrome.
     term = contains(
         name,
         (
-            "income", "investment", "savings", "asset", "cash", "budget",
-            "transaction", "finance", "currency", "bank",
-        ),
-    )
-    if term:
-        return Decision("green", f"finance-{term}")
-
-    if contains(name, ("camera", "photo", "image")):
-        return Decision("purple", "creative-imaging")
-
-    if context in {"devices", "panel"} and contains(
-        name, ("removable-media", "pendrive", "usb", "optical-drive")
-    ):
-        return Decision("blue", "storage-media")
-
-    term = contains(
-        name,
-        (
-            "heart", "love", "emoji", "emoticon", "smile", "reaction", "music",
-            "audio", "volume", "speaker", "microphone", "mic-", "headphone",
-            "headset", "podcast", "lyrics", "sound", "media",
-            "video", "radio",
+            "heart", "love", "emoji", "emoticon", "smile", "reaction",
         ),
     )
     if term:
@@ -449,38 +469,12 @@ def decide_family(path: Path, context: str | None = None) -> Decision:
     term = contains(
         name,
         (
-            "appearance", "theme", "style", "effect", "filter", "palette",
-            "color", "colour", "picker", "eyedropper", "paint", "brush",
-            "watercolor", "gradient", "image", "photo", "camera", "screenshot",
-            "graphics", "artistic", "draw-", "bezier", "calligraph",
-            "adjust", "blur", "vignette", "tonal", "whitebalance", "redeye",
-            "pixel", "bitmap", "filmgrain", "texture", "trace", "fill-",
-            "stroke", "shape",
-            "atmosphere", "border", "emboss", "composite", "composition",
-            "tile", "spray", "barcode", "manga",
+            "picker", "eyedropper", "paint", "brush", "watercolor", "draw-",
+            "bezier", "calligraph", "spray",
         ),
     )
     if term:
         return Decision("purple", f"creative-{term}")
-
-    term = contains(
-        name,
-        (
-            "network", "wireless", "wifi", "ethernet", "bluetooth", "vpn",
-            "link", "share", "sharing", "send", "receive", "mail", "message",
-            "chat", "conversation", "phone", "call", "contact", "irc", "feed",
-            "rss", "web", "internet", "modem", "hotspot",
-            "unread", "mention", "reply", "retweet", "twitter", "telegram",
-            "whatsapp", "messenger",
-        ),
-    )
-    if term:
-        return Decision("cyan", f"communication-{term}")
-    if name.startswith("im-"):
-        return Decision("cyan", "communication-im")
-
-    if contains_token(name, ("calendar", "user", "account", "avatar")):
-        return Decision("blue", "primary-personal-information")
 
     if context == "panel" and contains(name, ("tray", "indicator", "-panel")):
         return Decision("neutral", "panel-application-indicator")
@@ -491,16 +485,8 @@ def decide_family(path: Path, context: str | None = None) -> Decision:
             "information", "info", "help", "download", "upload", "import",
             "export", "open", "refresh", "reload", "sync", "search", "find",
             "undo", "redo", "zoom", "navigate", "go-", "next", "previous",
-            "forward", "back", "print", "scan", "sort", "reboot", "restart",
-            "switch-user", "session-switch", "document", "folder", "home",
-            "desktop", "filesystem", "drive", "disk", "storage", "computer",
-            "monitor", "display", "printer", "device", "tablet", "mobile",
-            "code-", "execute",
-            "inbox", "outbox", "map", "location", "compass", "activity",
-            "touchpad", "input-", "cpu", "gpu", "memory",
-            "sensor", "fan", "videocard", "nvme", "laptop",
-            "question", "convert", "commit", "branch", "fork", "license",
-            "console", "paperclip",
+            "forward", "back", "print", "scan", "reboot", "restart",
+            "switch-user", "session-switch", "execute", "convert", "commit",
         ),
     )
     if term:
@@ -508,13 +494,10 @@ def decide_family(path: Path, context: str | None = None) -> Decision:
 
     # Context-aware identities for supported KDE roots.
     if context == "places":
-        term = contains(name, ("recent", "history", "clock", "time"))
-        if term:
-            return Decision("neutral", f"places-{term}")
-        return Decision("blue", "places-identity")
+        return Decision("neutral", "places-identity")
 
     if context == "devices":
-        return Decision("blue", "devices-identity")
+        return Decision("neutral", "devices-identity")
 
     if context == "panel":
         term = contains(name, ("alarm", "event"))
@@ -553,6 +536,20 @@ def ensure_custom_style(text: str, theme: str, class_name: str) -> str:
     changed, count = STYLE_RE.subn(insert, text, count=1)
     if count != 1:
         raise ValueError("missing current-color-scheme style block")
+    return changed
+
+
+def synchronize_standard_palette(text: str, theme: str) -> str:
+    """Update KDE semantic fallback rules while leaving the classes dynamic."""
+    changed = text
+    for class_name, color in STANDARD_KDE_COLORS[theme].items():
+        changed = re.sub(
+            rf"(\.{re.escape(class_name)}\s*\{{[^}}]*\bcolor\s*:\s*)"
+            rf"#[0-9a-fA-F]{{6}}(\s*;)",
+            rf"\g<1>{color}\g<2>",
+            changed,
+            flags=re.IGNORECASE,
+        )
     return changed
 
 
@@ -633,8 +630,8 @@ def reset_previous_fallback(text: str, theme: str) -> tuple[str, bool]:
         return changed, True
 
     previous_class = FAMILY_CLASS[previous_family]
-    previous_color = CUSTOM_COLORS[theme].get(previous_class)
-    if previous_color is None:
+    current_color = CUSTOM_COLORS[theme].get(previous_class)
+    if current_color is None:
         if previous_class != "ColorScheme-Text":
             changed = re.sub(
                 rf'(class\s*=\s*["\'][^"\']*)\b{re.escape(previous_class)}\b',
@@ -645,7 +642,16 @@ def reset_previous_fallback(text: str, theme: str) -> tuple[str, bool]:
 
     def restore_tag(match: re.Match[str]) -> str:
         tag_text = match.group(0)
-        if re.search(re.escape(previous_color), tag_text, re.IGNORECASE) is None:
+        candidates = (current_color,) + LEGACY_CUSTOM_COLORS.get(previous_class, ())
+        previous_color = next(
+            (
+                color
+                for color in candidates
+                if re.search(re.escape(color), tag_text, re.IGNORECASE) is not None
+            ),
+            None,
+        )
+        if previous_color is None:
             return tag_text
         restored = re.sub(
             re.escape(previous_color), "currentColor", tag_text, flags=re.IGNORECASE
@@ -673,6 +679,7 @@ def recolor_text(
 ) -> str:
     class_name = FAMILY_CLASS[decision.family]
     changed, was_fallback = reset_previous_fallback(text, theme)
+    changed = synchronize_standard_palette(changed, theme)
     reset_text = changed
     if class_name != "ColorScheme-Text":
         changed = CLASS_TEXT_RE.sub(rf"\1{class_name}", changed)
@@ -702,7 +709,16 @@ def recolor_text(
         is not None
         and STYLE_RE.search(changed) is not None
     )
-    if was_fallback or changed != text or custom_fallback or standard_fallback:
+    # Neutral monochrome icons must remain ordinary KDE color-scheme icons.
+    # In particular, do not mark them for the colorful-theme builder: marked
+    # fallbacks are baked to a fixed Papirus grey during installation, whereas
+    # ColorScheme-Text/currentColor follows the active text brightness just as
+    # it does in Breeze. A rerun also removes old ``:neutral`` markers through
+    # reset_previous_fallback() above.
+    should_mark = decision.family != "neutral" and (
+        was_fallback or changed != text or custom_fallback or standard_fallback
+    )
+    if should_mark:
         changed = mark_semantic_fallback(changed, decision.family)
     return changed
 
@@ -713,6 +729,11 @@ def iter_sources(repo_root: Path):
             root = repo_root / theme / relative_root
             if not root.is_dir():
                 raise FileNotFoundError(root)
+            # Several Dark roots inherit the Papirus directory wholesale.
+            # Process the owning root once; otherwise the Dark pass rewrites
+            # the same physical light-theme files with the vivid palette.
+            if root.is_symlink():
+                continue
             for path in sorted(root.glob("*.svg")):
                 if path.is_symlink():
                     continue
